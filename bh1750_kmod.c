@@ -103,7 +103,7 @@ static struct cdevsw bh1750_cdevsw = {
 
 /* Device _probe() method */
 static int
-tea5767_probe(device_t dev)
+bh1750_probe(device_t dev)
 {
 
 #ifdef FDT
@@ -136,9 +136,6 @@ bh1750_detach(device_t dev)
 
     if (sc->bh1750_cdev != NULL)
 	destroy_dev(sc->bh1750_cdev);
-
-//    free(sc->bh1750_control, M_BH1750REG_WRITE);
-//    free(sc->bh1750_status, M_BH1750REG_READ);
 
     return (0);
 }
@@ -174,6 +171,42 @@ bh1750_attach(device_t dev)
 
     sc->bh1750_cdev->si_drv1 = sc;
 
+    return (0);
+}
+
+static int
+bh1750_open(struct cdev *bh1750_cdev, int oflags __unused, int devtype __unused,
+    struct thread *td __unused)
+{
+
+#ifdef DEBUG
+    uprintf("Opened device \"%s\" successfully.\n", bh1750_cdevsw.d_name);
+#endif
+
+    return (0);
+}
+
+static int
+bh1750_close(struct cdev *bh1750_cdev __unused, int fflag __unused, int devtype __unused,
+    struct thread *td __unused)
+{
+
+#ifdef DEBUG
+    uprintf("Closing device \"%s\".\n", bh1750_cdevsw.d_name);
+#endif
+
+    return (0);
+}
+
+static int
+bh1750_read(struct cdev *bh1750_cdev, struct uio *uio, int ioflag __unused)
+{
+    return (0);
+}
+
+static int
+bh1750_write(struct cdev *bh1750_cdev, struct uio *uio, int ioflag __unused)
+{
     return (0);
 }
 
