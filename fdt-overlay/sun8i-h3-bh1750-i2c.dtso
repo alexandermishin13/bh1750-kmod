@@ -1,0 +1,14 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "allwinner,sun8i-h3";
+};
+
+&i2c0 {
+    bh1750: bh1750@23 {
+	compatible = "bh1750";
+	reg = <0x23>;
+	status = "okay";
+    };
+};
