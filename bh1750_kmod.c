@@ -29,8 +29,10 @@
 #define FDT
 
 #include <sys/types.h>
+#include <sys/endian.h>
 #include <sys/module.h>
 #include <sys/systm.h>  /* uprintf */
+#include <sys/sysctl.h>
 #include <sys/conf.h>   /* cdevsw struct */
 #include <sys/param.h>  /* defines used in kernel.h */
 #include <sys/kernel.h> /* types used in module initialization */
@@ -40,7 +42,11 @@
 #include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
-#define BH1750_CDEV_NAME	"bh1750"
+#define BH1750_CDEV_NAME		"bh1750"
+#define BH1750_POWER_DOWN		0x00
+#define BH1750_POWER_ON			0x01
+#define BH1750_ONE_TIME_H_RES_MODE	0x20
+#define BH1750_DATA_READY_TIME		0x80 // ~120 ms
 
 #ifdef FDT
 #include <dev/ofw/openfirm.h>
@@ -48,15 +54,21 @@
 #include <dev/ofw/ofw_bus_subr.h>
 
 struct bh1750_softc {
-    device_t			 bh1750_dev;
-    uint8_t			 bh1750_addr;
-    phandle_t			 bh1750_node;
-    struct cdev			*bh1750_cdev;
+    device_t			 dev;
+    uint8_t			 addr;
+    uint8_t			 mode;
+    phandle_t			 node;
+    uint16_t			 light_raw;
 };
 
 static int bh1750_probe(device_t);
 static int bh1750_attach(device_t);
 static int bh1750_detach(device_t);
+
+static void bh1750_sysctl_register(struct bh1750_softc*);
+static int bh1750_write(struct bh1750_softc*);
+static int bh1750_read(struct bh1750_softc*, uint16_t*);
+static int bh1750_read_data(struct bh1750_softc*);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
     {"bh1750", (uintptr_t)"BH1750 Light Sensor module"},
@@ -82,24 +94,6 @@ MODULE_DEPEND(bh1750, iicbus, 1, 1, 1);
 IICBUS_FDT_PNP_INFO(bh1750_compat_data);
 
 #endif
-
-/* Function prototypes */
-static d_open_t      bh1750_open;
-static d_close_t     bh1750_close;
-static d_read_t      bh1750_read;
-static d_write_t     bh1750_write;
-//static d_ioctl_t     bh1750_ioctl;
-
-/* Character device entry points */
-static struct cdevsw bh1750_cdevsw = {
-    .d_version = D_VERSION,
-    .d_open = bh1750_open,
-    .d_close = bh1750_close,
-    .d_read = bh1750_read,
-    .d_write = bh1750_write,
-//    .d_ioctl = bh1750_ioctl,
-    .d_name = BH1750_CDEV_NAME,
-};
 
 /* Device _probe() method */
 static int
@@ -132,10 +126,7 @@ bh1750_probe(device_t dev)
 static int
 bh1750_detach(device_t dev)
 {
-    struct bh1750_softc *sc = device_get_softc(dev);
-
-    if (sc->bh1750_cdev != NULL)
-	destroy_dev(sc->bh1750_cdev);
+//    struct bh1750_softc *sc = device_get_softc(dev);
 
     return (0);
 }
@@ -144,69 +135,95 @@ bh1750_detach(device_t dev)
 static int
 bh1750_attach(device_t dev)
 {
-    struct bh1750_softc	*sc;
-    int err;
+    struct bh1750_softc *sc;
 
     sc = device_get_softc(dev);
 
-    sc->bh1750_dev = dev;
-    sc->bh1750_addr = iicbus_get_addr(dev);
-    sc->bh1750_node = ofw_bus_get_node(dev);
+    sc->dev = dev;
+    sc->addr = iicbus_get_addr(dev);
+    sc->node = ofw_bus_get_node(dev);
+    sc->mode = BH1750_ONE_TIME_H_RES_MODE;
 
-    /* Create the bh1750 cdev */
-    err = make_dev_p(MAKEDEV_CHECKNAME | MAKEDEV_WAITOK,
-	&sc->bh1750_cdev,
-	&bh1750_cdevsw,
-	0,
-	UID_ROOT,
-	GID_WHEEL,
-	0600,
-	BH1750_CDEV_NAME);
+    bh1750_sysctl_register(sc);
+    bh1750_read_data(sc);
 
-    if (err != 0) {
-	device_printf(dev, "Unable to create bh1750 cdev\n");
-	bh1750_detach(dev);
-	return (err);
+    return (0);
+}
+
+/* Write command */
+static int
+bh1750_write(struct bh1750_softc *sc)
+{
+    int try = 0;
+
+    struct iic_msg msg[] = {
+	{sc->addr, IIC_M_WR, 1, &(sc->mode)}
+    };
+
+    for (;;)
+    {
+	if (iicbus_transfer(sc->dev, msg, 1) == 0)
+	    return (0);
+	if (++try > 5) {
+	    device_printf(sc->dev, "iicbus write failed\n");
+	    return (-1);
+	}
+	pause("bh1750_write", hz);
+    }
+}
+
+/* Read data */
+static int
+bh1750_read(struct bh1750_softc *sc, uint16_t *result)
+{
+    int try = 0;
+    uint16_t be_result;
+
+    struct iic_msg msg[] = {
+	{sc->addr, IIC_M_RD, 2, (uint8_t *)&be_result}
+    };
+
+    try = 0;
+    for (;;)
+    {
+	if (iicbus_transfer(sc->dev, msg, 1) == 0)
+	    break;
+	if (++try > 5) {
+	    device_printf(sc->dev, "iicbus read failed\n");
+	    return (-1);
+	}
+	pause("bh1750_read", hz);
     }
 
-    sc->bh1750_cdev->si_drv1 = sc;
+    *result = be16toh(be_result);
 
     return (0);
 }
 
+/* Read the sensor data*/
 static int
-bh1750_open(struct cdev *bh1750_cdev, int oflags __unused, int devtype __unused,
-    struct thread *td __unused)
+bh1750_read_data(struct bh1750_softc *sc)
 {
+    bh1750_write(sc);
 
-#ifdef DEBUG
-    uprintf("Opened device \"%s\" successfully.\n", bh1750_cdevsw.d_name);
-#endif
+    DELAY(BH1750_DATA_READY_TIME);
+
+    bh1750_read(sc, &(sc->light_raw));
 
     return (0);
 }
 
-static int
-bh1750_close(struct cdev *bh1750_cdev __unused, int fflag __unused, int devtype __unused,
-    struct thread *td __unused)
+/* Create sysctl variables and set their handlers */
+static void
+bh1750_sysctl_register(struct bh1750_softc *sc)
 {
+    struct sysctl_ctx_list	*ctx;
+    struct sysctl_oid		*tree;
 
-#ifdef DEBUG
-    uprintf("Closing device \"%s\".\n", bh1750_cdevsw.d_name);
-#endif
+    ctx = device_get_sysctl_ctx(sc->dev);
+    tree = device_get_sysctl_tree(sc->dev);
 
-    return (0);
+    SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+	"light_raw", CTLFLAG_RD,
+	&sc->light_raw, 0, "light sensor raw data");
 }
-
-static int
-bh1750_read(struct cdev *bh1750_cdev, struct uio *uio, int ioflag __unused)
-{
-    return (0);
-}
-
-static int
-bh1750_write(struct cdev *bh1750_cdev, struct uio *uio, int ioflag __unused)
-{
-    return (0);
-}
-
