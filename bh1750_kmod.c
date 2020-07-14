@@ -33,6 +33,7 @@
 #include <sys/module.h>
 #include <sys/systm.h>  /* uprintf */
 #include <sys/sysctl.h>
+#include <sys/taskqueue.h>
 #include <sys/conf.h>   /* cdevsw struct */
 #include <sys/param.h>  /* defines used in kernel.h */
 #include <sys/kernel.h> /* types used in module initialization */
@@ -42,11 +43,12 @@
 #include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
-#define BH1750_CDEV_NAME		"bh1750"
+#define	BH1750_POLLTIME			5	/* in seconds */
+
 #define BH1750_POWER_DOWN		0x00
 #define BH1750_POWER_ON			0x01
 #define BH1750_ONE_TIME_H_RES_MODE	0x20
-#define BH1750_DATA_READY_TIME		0x80 // ~120 ms
+#define BH1750_DATA_READY_TIME		0x80	/* ~120 ms */
 
 #ifdef FDT
 #include <dev/ofw/openfirm.h>
@@ -56,9 +58,10 @@
 struct bh1750_softc {
     device_t			 dev;
     uint8_t			 addr;
-    uint8_t			 mode;
     phandle_t			 node;
-    uint16_t			 light_raw;
+    uint16_t			 measurement;
+    struct timeout_task		 task;
+    bool			 detaching;
 };
 
 static int bh1750_probe(device_t);
@@ -66,12 +69,13 @@ static int bh1750_attach(device_t);
 static int bh1750_detach(device_t);
 
 static void bh1750_sysctl_register(struct bh1750_softc*);
-static int bh1750_write(struct bh1750_softc*);
-static int bh1750_read(struct bh1750_softc*, uint16_t*);
+static void bh1750_poll(void*, int);
+static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
+static int bh1750_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
-    {"bh1750", (uintptr_t)"BH1750 Light Sensor module"},
+    {"bh1750", (uintptr_t)"BH1750 Ambient Light Sensor module"},
     {NULL, false}
 };
 
@@ -115,7 +119,7 @@ bh1750_probe(device_t dev)
 
     return (BUS_PROBE_DEFAULT);
 #else
-    device_set_desc(dev, "BH1750 compatible Light Sensor module");
+    device_set_desc(dev, "BH1750 Ambient Light Sensor module");
 
     return (BUS_PROBE_NOWILDCARD);
 #endif
@@ -126,7 +130,11 @@ bh1750_probe(device_t dev)
 static int
 bh1750_detach(device_t dev)
 {
-//    struct bh1750_softc *sc = device_get_softc(dev);
+    struct bh1750_softc *sc = device_get_softc(dev);
+
+    sc->detaching = true;
+    while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
+	taskqueue_drain_timeout(taskqueue_thread, &sc->task);
 
     return (0);
 }
@@ -142,22 +150,43 @@ bh1750_attach(device_t dev)
     sc->dev = dev;
     sc->addr = iicbus_get_addr(dev);
     sc->node = ofw_bus_get_node(dev);
-    sc->mode = BH1750_ONE_TIME_H_RES_MODE;
+
+    TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
+
+    /* 
+     * Do an initial read so we have correct values for reporting before
+     * registering the sysctls that can access those values.  This also
+     * schedules the periodic polling the driver does every few seconds to
+     * update the sysctl variables.
+     */
+    bh1750_poll(sc, 0);
 
     bh1750_sysctl_register(sc);
-    bh1750_read_data(sc);
 
     return (0);
 }
 
+static void
+bh1750_poll(void *arg, int pending __unused)
+{
+	struct bh1750_softc	*sc;
+
+	sc = (struct bh1750_softc *)arg;
+
+	bh1750_read_data(sc);
+	if (!sc->detaching)
+		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
+		    BH1750_POLLTIME * SBT_1S, 0, C_PREL(3));
+}
+
 /* Write command */
 static int
-bh1750_write(struct bh1750_softc *sc)
+bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 {
     int try = 0;
 
     struct iic_msg msg[] = {
-	{sc->addr, IIC_M_WR, 1, &(sc->mode)}
+	{sc->addr, IIC_M_WR, 1, &(opecode)}
     };
 
     for (;;)
@@ -204,11 +233,11 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
-    bh1750_write(sc);
+    bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE);
 
     DELAY(BH1750_DATA_READY_TIME);
 
-    bh1750_read(sc, &(sc->light_raw));
+    bh1750_read(sc, &(sc->measurement));
 
     return (0);
 }
@@ -224,6 +253,6 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
     tree = device_get_sysctl_tree(sc->dev);
 
     SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"light_raw", CTLFLAG_RD,
-	&sc->light_raw, 0, "light sensor raw data");
+	"measurement", CTLFLAG_RD,
+	&sc->measurement, 0, "light sensor measurement data");
 }
