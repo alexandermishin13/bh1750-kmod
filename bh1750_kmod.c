@@ -95,6 +95,7 @@ static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
 static int bh1750_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
+static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
     {"bh1750", (uintptr_t)"BH1750 Ambient Light Sensor module"},
@@ -229,7 +230,7 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 	return (ret);
 
     sc->mtreg = mtreg_val;
-    sc->ready_time = DIV_CEIL(mtreg_val * sc->mtreg_params->step_usec, 1000);
+    sc->ready_time = mtreg_val * sc->mtreg_params->step_usec;
 
     return 0;
 }
@@ -313,11 +314,31 @@ bh1750_read_data(struct bh1750_softc *sc)
 {
     bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE);
 
-    DELAY(sc->ready_time);
+    DELAY(DIV_CEIL(sc->ready_time, 1000));
 
     bh1750_read(sc, &(sc->measurement));
 
     return (0);
+}
+
+static int
+bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
+{
+    struct bh1750_softc *sc = arg1;
+    uint16_t _mtreg = (uint16_t)sc->mtreg;
+    int error = 0;
+
+    error = SYSCTL_OUT(req, &_mtreg, sizeof(_mtreg));
+    if (error != 0 || req->newptr == NULL)
+	return (error);
+
+    error = SYSCTL_IN(req, &_mtreg, sizeof(_mtreg));
+    if (error != 0)
+	return (error);
+
+    error = bh1750_set_mtreg(sc, _mtreg);
+
+    return (error);
 }
 
 /* Create sysctl variables and set their handlers */
@@ -333,4 +354,13 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
     SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"measurement", CTLFLAG_RD,
 	&sc->measurement, 0, "light sensor measurement data");
+
+    SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+	"mtreg", CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	&bh1750_mtreg_sysctl, "CU", "MTreg value");
+
+    SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+	"ready-time", CTLFLAG_RD,
+	&sc->ready_time, "Measurement time, usec");
+
 }
