@@ -43,11 +43,18 @@
 #include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
+#define DIV_CEIL(a, b) (((a) / (b)) + (((a) % (b)) > 0 ? 1 : 0))
+
 #define	BH1750_POLLTIME			5	/* in seconds */
+
+/* Number of bits in high or low parts of MTreg */
+#define BH1750_MTREG_BYTE_LEN		5
 
 #define BH1750_POWER_DOWN		0x00
 #define BH1750_POWER_ON			0x01
 #define BH1750_ONE_TIME_H_RES_MODE	0x20
+#define BH1750_MTREG_H_BYTE		0x40
+#define BH1750_MTREG_L_BYTE		0x60
 #define BH1750_DATA_READY_TIME		0x80	/* ~120 ms */
 
 #ifdef FDT
@@ -55,11 +62,25 @@
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
+/* chip mtreg parameters */
+struct bh1750_mtreg_t {
+    uint16_t val_min;
+    uint16_t val_max;
+    uint16_t val_default;
+    unsigned long step_usec;
+};
+/* step_usec = ceil(chip_data_ready_usec / mtreg_value) */
+static const struct bh1750_mtreg_t
+bh1750_mtreg_params = { 0x1f, 0xfe, 0x45, DIV_CEIL(120000, 0x45) };
+
 struct bh1750_softc {
     device_t			 dev;
     uint8_t			 addr;
     phandle_t			 node;
     uint16_t			 measurement;
+    uint16_t			 mtreg;
+    unsigned long		 ready_time;
+    const struct bh1750_mtreg_t	*mtreg_params;
     struct timeout_task		 task;
     bool			 detaching;
 };
@@ -70,6 +91,7 @@ static int bh1750_detach(device_t);
 
 static void bh1750_sysctl_register(struct bh1750_softc*);
 static void bh1750_poll(void*, int);
+static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
 static int bh1750_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
@@ -136,6 +158,8 @@ bh1750_detach(device_t dev)
     while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
 	taskqueue_drain_timeout(taskqueue_thread, &sc->task);
 
+    bh1750_write(sc, BH1750_POWER_DOWN);
+
     return (0);
 }
 
@@ -150,6 +174,8 @@ bh1750_attach(device_t dev)
     sc->dev = dev;
     sc->addr = iicbus_get_addr(dev);
     sc->node = ofw_bus_get_node(dev);
+    sc->mtreg_params = &bh1750_mtreg_params;
+    bh1750_set_mtreg(sc, sc->mtreg_params->val_default);
 
     TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
 
@@ -177,6 +203,58 @@ bh1750_poll(void *arg, int pending __unused)
 	if (!sc->detaching)
 		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
 		    BH1750_POLLTIME * SBT_1S, 0, C_PREL(3));
+}
+
+static int
+bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
+{
+    int ret;
+    uint8_t mt_byte;
+
+    // Power down the device before changes
+    ret = bh1750_write(sc, BH1750_POWER_DOWN);
+    if (ret)
+	return (ret);
+
+    // Transfer hight byte of MTreg
+    mt_byte = mtreg_val >> BH1750_MTREG_BYTE_LEN;
+    ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
+    if (ret)
+	return (ret);
+    
+    // Transfer low byte of MTreg
+    mt_byte = mtreg_val & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
+    ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
+    if (ret)
+	return (ret);
+
+    sc->mtreg = mtreg_val;
+    sc->ready_time = DIV_CEIL(mtreg_val * sc->mtreg_params->step_usec, 1000);
+
+    return 0;
+}
+
+static int
+bh1750_set_measure_time(struct bh1750_softc *sc, unsigned long ready_usec)
+{
+    int ret;
+    uint16_t val;
+    const struct bh1750_mtreg_t *mtreg = sc->mtreg_params;
+
+    // Check if it a valid time value
+    if (ready_usec % mtreg->step_usec != 0)
+	return EINVAL;
+
+    // Check for MTreg range
+    val = ready_usec / mtreg->step_usec;
+    if (val < mtreg->val_min || val > mtreg->val_max)
+	return EINVAL;
+
+    ret = bh1750_set_mtreg(sc, val);
+    if (ret)
+	return (ret);
+
+    return 0;
 }
 
 /* Write command */
@@ -235,7 +313,7 @@ bh1750_read_data(struct bh1750_softc *sc)
 {
     bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE);
 
-    DELAY(BH1750_DATA_READY_TIME);
+    DELAY(sc->ready_time);
 
     bh1750_read(sc, &(sc->measurement));
 
