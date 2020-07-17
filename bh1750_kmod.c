@@ -91,11 +91,14 @@ static int bh1750_detach(device_t);
 
 static void bh1750_sysctl_register(struct bh1750_softc*);
 static void bh1750_poll(void*, int);
+
+static int bh1750_fdt_get_mtreg(struct bh1750_softc*);
 static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
+static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
+
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
 static int bh1750_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
-static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
     {"bh1750", (uintptr_t)"BH1750 Ambient Light Sensor module"},
@@ -176,7 +179,8 @@ bh1750_attach(device_t dev)
     sc->addr = iicbus_get_addr(dev);
     sc->node = ofw_bus_get_node(dev);
     sc->mtreg_params = &bh1750_mtreg_params;
-    bh1750_set_mtreg(sc, sc->mtreg_params->val_default);
+
+    bh1750_fdt_get_mtreg(sc);
 
     TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
 
@@ -363,4 +367,42 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 	"ready-time", CTLFLAG_RD,
 	&sc->ready_time, "Measurement time, usec");
 
+}
+
+/* Get MTreg properties if set from a device node */
+static int
+bh1750_fdt_get_mtreg(struct bh1750_softc *sc)
+{
+    pcell_t pmtreg;
+    uint16_t mtreg;
+    int mtreg_found;
+
+    /* If no "mtreg" parameter is set the default value will be applied*/
+    mtreg_found = OF_getencprop(sc->node, "mtreg", &pmtreg, sizeof(pmtreg));
+    if (mtreg_found > 0)
+    {
+	mtreg = (uint16_t)pmtreg;
+	if ((mtreg != pmtreg) || (bh1750_set_mtreg(sc, mtreg) != 0))
+	{
+	    device_printf(sc->dev,
+		"could not acquire correct MTreg value from DTS\n");
+
+	    return (EINVAL);
+	}
+    }
+    else
+	bh1750_set_mtreg(sc, sc->mtreg_params->val_default);
+
+    /* Print more details */
+    if (bootverbose)
+    {
+	if (mtreg_found > 0)
+	    device_printf(sc->dev,
+			  "Acquired MTreg: 0x%0x from DTS\n", sc->mtreg);
+	else
+	    device_printf(sc->dev,
+			  "Acquired MTreg: 0x%0x by default\n", sc->mtreg);
+    }
+
+    return (0);
 }
