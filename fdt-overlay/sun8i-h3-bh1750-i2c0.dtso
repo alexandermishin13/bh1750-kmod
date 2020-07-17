@@ -7,7 +7,11 @@
 
 &i2c0 {
     bh1750: bh1750@23 {
+	#address-cells = <1>;
+	#size-cells = <0>;
 	compatible = "bh1750";
+	/* MTreg = 69 by default for bh1750 */
+	mtreg = <0x45>;
 	reg = <0x23>;
 	status = "okay";
     };
