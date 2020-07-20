@@ -44,6 +44,7 @@
 #include <dev/iicbus/iiconf.h>
 
 #define DIV_CEIL(a, b) (((a) / (b)) + (((a) % (b)) > 0 ? 1 : 0))
+#define DIV_ROUND_UINT(a, b) ((((a) + (b)/2) / (b)))
 
 #define	BH1750_POLLTIME			5	/* in seconds */
 
@@ -77,7 +78,8 @@ struct bh1750_softc {
     device_t			 dev;
     uint8_t			 addr;
     phandle_t			 node;
-    uint16_t			 measurement;
+    uint16_t			 counts;
+    uint16_t			 illuminance;
     uint16_t			 mtreg;
     unsigned long		 ready_time;
     const struct bh1750_mtreg_t	*mtreg_params;
@@ -320,7 +322,8 @@ bh1750_read_data(struct bh1750_softc *sc)
 
     DELAY(DIV_CEIL(sc->ready_time, 1000));
 
-    bh1750_read(sc, &(sc->measurement));
+    bh1750_read(sc, &sc->counts);
+    sc->illuminance = (uint32_t)sc->counts * 10 / 12;
 
     return (0);
 }
@@ -356,8 +359,12 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
     tree = device_get_sysctl_tree(sc->dev);
 
     SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"measurement", CTLFLAG_RD,
-	&sc->measurement, 0, "light sensor measurement data");
+	"counts", CTLFLAG_RD,
+	&sc->counts, 0, "Raw measurement data");
+
+    SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+	"illuminance", CTLFLAG_RD,
+	&sc->illuminance, 0, "Light intensity, lx");
 
     SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"mtreg", CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
