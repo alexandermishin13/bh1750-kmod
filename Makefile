@@ -1,5 +1,7 @@
+# $FreeBSD$
+
 KMOD=bh1750
-SRCS=bh1750_kmod.c
+SRCS=bh1750.c
 SUBDIR=fdt-overlay
 
 SRCS+=	\
@@ -10,6 +12,6 @@ SRCS+=	\
 	opt_platform.h \
 	fdt_pinctrl_if.h \
 
-CFLAGS+=  -DDEBUG
+#CFLAGS+=  -DDEBUG
 
 .include <bsd.kmod.mk>
