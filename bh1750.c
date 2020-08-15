@@ -78,10 +78,10 @@ struct bh1750_softc {
     device_t			 dev;
     uint8_t			 addr;
     phandle_t			 node;
-    uint16_t			 counts;
-    uint16_t			 illuminance;
-    uint16_t			 mtreg;
+    unsigned long		 illuminance;
     unsigned long		 ready_time;
+    uint16_t			 counts;
+    uint16_t			 mtreg;
     const struct bh1750_mtreg_t	*mtreg_params;
     struct timeout_task		 task;
     bool			 detaching;
@@ -323,7 +323,8 @@ bh1750_read_data(struct bh1750_softc *sc)
     DELAY(DIV_CEIL(sc->ready_time, 1000));
 
     bh1750_read(sc, &sc->counts);
-    sc->illuminance = (uint32_t)sc->counts * 10 / 12;
+    /* milli lux */
+    sc->illuminance = (uint32_t)sc->counts * 1000 * 10 / 12;
 
     return (0);
 }
@@ -362,9 +363,9 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 	"counts", CTLFLAG_RD,
 	&sc->counts, 0, "Raw measurement data");
 
-    SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+    SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"illuminance", CTLFLAG_RD,
-	&sc->illuminance, 0, "Light intensity, lx");
+	&sc->illuminance, "Light intensity, mlx");
 
     SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"mtreg", CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
