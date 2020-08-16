@@ -70,6 +70,7 @@ struct bh1750_mtreg_t {
     uint16_t val_default;
     unsigned long step_usec;
 };
+
 /* step_usec = ceil(chip_data_ready_usec / mtreg_value) */
 static const struct bh1750_mtreg_t
 bh1750_mtreg_params = { 0x1f, 0xfe, 0x45, DIV_CEIL(120000, 0x45) };
@@ -82,6 +83,7 @@ struct bh1750_softc {
     unsigned long		 ready_time;
     uint16_t			 counts;
     uint16_t			 mtreg;
+    uint8_t			 quality_lack;
     const struct bh1750_mtreg_t	*mtreg_params;
     struct timeout_task		 task;
     bool			 detaching;
@@ -162,7 +164,7 @@ bh1750_detach(device_t dev)
 
     sc->detaching = true;
     while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
-	taskqueue_drain_timeout(taskqueue_thread, &sc->task);
+	    taskqueue_drain_timeout(taskqueue_thread, &sc->task);
 
     bh1750_write(sc, BH1750_POWER_DOWN);
 
@@ -202,7 +204,7 @@ bh1750_attach(device_t dev)
 static void
 bh1750_poll(void *arg, int pending __unused)
 {
-	struct bh1750_softc	*sc;
+	struct bh1750_softc *sc;
 
 	sc = (struct bh1750_softc *)arg;
 
@@ -210,6 +212,21 @@ bh1750_poll(void *arg, int pending __unused)
 	if (!sc->detaching)
 		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
 		    BH1750_POLLTIME * SBT_1S, 0, C_PREL(3));
+}
+
+static int
+bh1750_set_quality(struct bh1750_softc *sc, uint8_t quality_lack)
+{
+    /* up to 50% by the datasheet */
+    if (quality_lack > 50)
+	return (-1);
+
+    /* Lack of quality leads to increasing of ready-time */
+    sc->quality_lack = quality_lack;
+    sc->ready_time = sc->ready_time \
+	* (100 + quality_lack) / 100;
+
+    return (0);
 }
 
 static int
@@ -236,9 +253,10 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 	return (ret);
 
     sc->mtreg = mtreg_val;
-    sc->ready_time = mtreg_val * sc->mtreg_params->step_usec;
+    sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
+	* (100 + sc->quality_lack) / 100;
 
-    return 0;
+    return (0);
 }
 
 static int
@@ -349,6 +367,30 @@ bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
     return (error);
 }
 
+static int
+bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS)
+{
+    struct bh1750_softc *sc = arg1;
+    uint8_t _lack = (uint8_t)sc->quality_lack;
+    int error = 0;
+
+    error = SYSCTL_OUT(req, &_lack, sizeof(_lack));
+    if (error != 0 || req->newptr == NULL)
+	return (error);
+
+    error = SYSCTL_IN(req, &_lack, sizeof(_lack));
+    if (error != 0)
+	return (error);
+
+    /* Lack of quality from 0 to 50 percent by the datasheet */
+    if (_lack > 50)
+	error = EINVAL;
+    else
+	error = bh1750_set_quality(sc, _lack);
+
+    return (error);
+}
+
 /* Create sysctl variables and set their handlers */
 static void
 bh1750_sysctl_register(struct bh1750_softc *sc)
@@ -361,19 +403,23 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 
     SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"counts", CTLFLAG_RD,
-	&sc->counts, 0, "Raw measurement data");
+	&sc->counts, 0, "raw measurement data");
 
     SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"illuminance", CTLFLAG_RD,
-	&sc->illuminance, "Light intensity, mlx");
+	&sc->illuminance, "light intensity, mlx");
 
     SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"mtreg", CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 	&bh1750_mtreg_sysctl, "CU", "MTreg value");
 
+    SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+	"quality-lack", CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	&bh1750_quality_sysctl, "CU", "lack of quality from 0 to 50, %");
+
     SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 	"ready-time", CTLFLAG_RD,
-	&sc->ready_time, "Measurement time, usec");
+	&sc->ready_time, "measurement time, usec");
 
 }
 
@@ -381,9 +427,10 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 static int
 bh1750_fdt_get_mtreg(struct bh1750_softc *sc)
 {
-    pcell_t pmtreg;
+    pcell_t pmtreg, pquality;
     uint16_t mtreg;
-    int mtreg_found;
+    uint8_t quality;
+    int mtreg_found, quality_found;
 
     /* If no "mtreg" parameter is set the default value will be applied*/
     mtreg_found = OF_getencprop(sc->node, "mtreg", &pmtreg, sizeof(pmtreg));
@@ -401,6 +448,22 @@ bh1750_fdt_get_mtreg(struct bh1750_softc *sc)
     else
 	bh1750_set_mtreg(sc, sc->mtreg_params->val_default);
 
+    quality_found = OF_getencprop(sc->node, "quality-lack", &pquality, sizeof(pquality));
+    if (quality_found > 0)
+    {
+	quality = (uint16_t)pquality;
+//	if ((quality != pquality) || (bh1750_set_quality(sc, quality) != 0))
+	if (bh1750_set_quality(sc, quality) != 0)
+	{
+	    device_printf(sc->dev,
+		"could not acquire correct quality-lack value from DTS\n");
+
+	    return (EINVAL);
+	}
+    }
+    else
+	bh1750_set_quality(sc, 0);
+
     /* Print more details */
     if (bootverbose)
     {
@@ -410,6 +473,13 @@ bh1750_fdt_get_mtreg(struct bh1750_softc *sc)
 	else
 	    device_printf(sc->dev,
 			  "Acquired MTreg: 0x%0x by default\n", sc->mtreg);
+
+	if (quality_found > 0)
+	    device_printf(sc->dev,
+			  "Acquired quality-lack: 0x%0x from DTS\n", sc->quality_lack);
+	else
+	    device_printf(sc->dev,
+			  "Acquired quality-lack: 0x%0x by default\n", sc->quality_lack);
     }
 
     return (0);
