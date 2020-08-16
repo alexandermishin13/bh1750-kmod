@@ -10,6 +10,7 @@
 I2C=/usr/sbin/i2c
 DEV=/dev/iic0
 ADDR=0x23
+#ADDR=0x5C
 OPECODE=$'\x10'
 
 printf ${OPECODE} | ${I2C} -f ${DEV} -a ${ADDR} -m tr -d w -v -w 0
