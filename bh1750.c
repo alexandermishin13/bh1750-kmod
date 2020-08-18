@@ -161,13 +161,15 @@ bh1750_probe(device_t dev)
 static int
 bh1750_detach(device_t dev)
 {
-    struct bh1750_softc *sc = device_get_softc(dev);
+	struct bh1750_softc *sc = device_get_softc(dev);
 
-    sc->detaching = true;
-    while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
-	    taskqueue_drain_timeout(taskqueue_thread, &sc->task);
+	sc->detaching = true;
+	while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
+		taskqueue_drain_timeout(taskqueue_thread, &sc->task);
 
-    bh1750_write(sc, BH1750_POWER_DOWN);
+	/* Send POWER_DOWN opecode if the device was initialized */
+	if (sc->mtreg > 0)
+		bh1750_write(sc, BH1750_POWER_DOWN);
 
     return (0);
 }
