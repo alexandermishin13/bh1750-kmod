@@ -96,8 +96,9 @@ static int bh1750_detach(device_t);
 static void bh1750_sysctl_register(struct bh1750_softc*);
 static void bh1750_poll(void*, int);
 
-static int bh1750_fdt_get_mtreg(struct bh1750_softc*);
+static int bh1750_fdt_get_params(struct bh1750_softc*);
 static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
+static int bh1750_set_quality(struct bh1750_softc*, uint16_t);
 static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
 
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
@@ -175,38 +176,43 @@ bh1750_detach(device_t dev)
 static int
 bh1750_attach(device_t dev)
 {
-    struct bh1750_softc *sc;
+	struct bh1750_softc *sc = device_get_softc(dev);
 
-    sc = device_get_softc(dev);
+	sc->dev = dev;
+	sc->addr = iicbus_get_addr(dev);
+	sc->node = ofw_bus_get_node(dev);
+	sc->mtreg_params = &bh1750_mtreg_params;
 
-    sc->dev = dev;
-    sc->addr = iicbus_get_addr(dev);
-    sc->node = ofw_bus_get_node(dev);
-    sc->mtreg_params = &bh1750_mtreg_params;
+	/* Check if device is connected but return OK anyway
+	 * to keep the device numbering
+	 */
+	if (bh1750_write(sc, BH1750_POWER_ON) != 0) {
+		device_printf(dev, "failed to connect to the device\n");
+		return (0);
+	}
 
-    bh1750_fdt_get_mtreg(sc);
+	bh1750_fdt_get_params(sc);
 
-    TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
+	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
 
-    /* 
-     * Do an initial read so we have correct values for reporting before
-     * registering the sysctls that can access those values.  This also
-     * schedules the periodic polling the driver does every few seconds to
-     * update the sysctl variables.
-     */
-    bh1750_poll(sc, 0);
+	/* 
+	 * Do an initial read so we have correct values for reporting before
+	 * registering the sysctls that can access those values. This also
+	 * schedules the periodic polling the driver does every few seconds to
+	 * update the sysctl variables.
+	 */
+	bh1750_poll(sc, 0);
 
-    bh1750_sysctl_register(sc);
+	/* Add sysctl variables */
+	bh1750_sysctl_register(sc);
 
-    return (0);
+	return (0);
 }
 
 static void
 bh1750_poll(void *arg, int pending __unused)
 {
-	struct bh1750_softc *sc;
-
-	sc = (struct bh1750_softc *)arg;
+	struct bh1750_softc *sc = (struct bh1750_softc *)arg;
 
 	bh1750_read_data(sc);
 	if (!sc->detaching)
@@ -215,7 +221,7 @@ bh1750_poll(void *arg, int pending __unused)
 }
 
 static int
-bh1750_set_quality(struct bh1750_softc *sc, uint8_t quality_lack)
+bh1750_set_quality(struct bh1750_softc *sc, uint16_t quality_lack)
 {
     /* up to 50% by the datasheet */
     if (quality_lack > 50)
@@ -302,6 +308,8 @@ bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 	}
 	pause("bh1750_write", hz);
     }
+
+    return (0);
 }
 
 /* Read data */
@@ -336,15 +344,23 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
-    bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE);
+	/* For H-resolution:
+	   milli_lux = counts * 1000 * (10 / 12) * (69 / MTReg)
+	 */
+	unsigned long k = 57500;
 
-    DELAY(DIV_CEIL(sc->ready_time, 1000));
+	if (bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE) != 0)
+		return (-1);
 
-    bh1750_read(sc, &sc->counts);
-    /* milli lux */
-    sc->illuminance = (uint32_t)sc->counts * 1000 * 10 / 12;
+	DELAY(DIV_CEIL(sc->ready_time, 1000));
 
-    return (0);
+	if (bh1750_read(sc, &sc->counts) != 0)
+		return (-1);
+
+	/* milli lux */
+	sc->illuminance = k * sc->counts / sc->mtreg;
+
+	return (0);
 }
 
 static int
@@ -396,36 +412,38 @@ static void
 bh1750_sysctl_register(struct bh1750_softc *sc)
 {
     struct sysctl_ctx_list	*ctx;
-    struct sysctl_oid		*tree;
+    struct sysctl_oid		*tree_node;
+    struct sysctl_oid_list	*tree;
 
     ctx = device_get_sysctl_ctx(sc->dev);
-    tree = device_get_sysctl_tree(sc->dev);
+    tree_node = device_get_sysctl_tree(sc->dev);
+    tree = SYSCTL_CHILDREN(tree_node);
 
-    SYSCTL_ADD_U16(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"counts", CTLFLAG_RD,
+    SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "counts",
+	CTLFLAG_RD,
 	&sc->counts, 0, "raw measurement data");
 
-    SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"illuminance", CTLFLAG_RD,
+    SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
+	CTLFLAG_RD,
 	&sc->illuminance, "light intensity, mlx");
 
-    SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"mtreg", CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+    SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "mtreg",
+	CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 	&bh1750_mtreg_sysctl, "CU", "MTreg value");
 
-    SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"quality-lack", CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+    SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "quality-lack",
+	CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 	&bh1750_quality_sysctl, "CU", "lack of quality from 0 to 50, %");
 
-    SYSCTL_ADD_ULONG(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	"ready-time", CTLFLAG_RD,
+    SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "ready-time",
+	CTLFLAG_RD,
 	&sc->ready_time, "measurement time, usec");
 
 }
 
 /* Get MTreg properties if set from a device node */
 static int
-bh1750_fdt_get_mtreg(struct bh1750_softc *sc)
+bh1750_fdt_get_params(struct bh1750_softc *sc)
 {
     pcell_t pmtreg, pquality;
     uint16_t mtreg;
@@ -469,17 +487,17 @@ bh1750_fdt_get_mtreg(struct bh1750_softc *sc)
     {
 	if (mtreg_found > 0)
 	    device_printf(sc->dev,
-			  "Acquired MTreg: 0x%0x from DTS\n", sc->mtreg);
+		"Acquired MTreg: 0x%0x from DTS\n", sc->mtreg);
 	else
 	    device_printf(sc->dev,
-			  "Acquired MTreg: 0x%0x by default\n", sc->mtreg);
+		"Acquired MTreg: 0x%0x by default\n", sc->mtreg);
 
 	if (quality_found > 0)
 	    device_printf(sc->dev,
-			  "Acquired quality-lack: 0x%0x from DTS\n", sc->quality_lack);
+		"Acquired quality-lack: 0x%0x from DTS\n", sc->quality_lack);
 	else
 	    device_printf(sc->dev,
-			  "Acquired quality-lack: 0x%0x by default\n", sc->quality_lack);
+		"Acquired quality-lack: 0x%0x by default\n", sc->quality_lack);
     }
 
     return (0);

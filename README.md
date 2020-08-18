@@ -30,7 +30,3 @@ sysctl dev.bh1750.0
 ## Status
 
 The driver was tested on two sensors at once with addresses 0x23 and 0x5c.
-
-## To Do
-
-Needs to check on attach if defined by overlays sensors really connected.
