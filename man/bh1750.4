@@ -1,0 +1,130 @@
+.\"-
+.\"Copyright (c) 2020, Alexander Mishin
+.\"All rights reserved.
+.\"
+.\"Redistribution and use in source and binary forms, with or without
+.\"modification, are permitted provided that the following conditions are met:
+.\"
+.\"* Redistributions of source code must retain the above copyright notice, this
+.\"  list of conditions and the following disclaimer.
+.\"
+.\"* Redistributions in binary form must reproduce the above copyright notice,
+.\"  this list of conditions and the following disclaimer in the documentation
+.\"  and/or other materials provided with the distribution.
+.\"
+.\"THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+.\"AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\"IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+.\"DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+.\"FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\"DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+.\"SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+.\"CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+.\"OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+.\"OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+.Dd Aug 14, 2020
+.Dt BH1750 4
+.Os
+.Sh NAME
+.Nm bh1750
+.Nd driver for the ambient light sensor bh1750
+.Sh SYNOPSIS
+To load the driver as a module at boot time, place the following line in
+.Xr loader.conf 5 :
+.Bd -literal -offset indent
+bh1750_load="YES"
+.Ed
+.Sh HARDWARE
+The current version of the
+.Nm
+driver supports the IC with one of the following compatible strings:
+.Pp
+.Bl -bullet -compact
+.It
+bh1750
+.El
+.Sh DESCRIPTION
+The
+.Nm
+device driver provides support for the BH1750FVI - digital Ambient Light Sensor
+IC with I2C bus interface.
+.Pp
+It provides both control for measurement and data readings of the digital values
+from an illuminance analog input via
+.Xr sysctl 8 :
+.Bd -literal
+dev.bh1750.<unit>.ready-time: 180090
+dev.bh1750.<unit>.quality-lack: 50
+dev.bh1750.<unit>.mtreg: 69
+dev.bh1750.<unit>.illuminance: 84166
+dev.bh1750.<unit>.counts: 101
+dev.bh1750.<unit>.%parent: iicbus0
+dev.bh1750.<unit>.%pnpinfo: name=bh1750@23 compat=bh1750
+dev.bh1750.<unit>.%location: addr=0x46
+dev.bh1750.<unit>.<unit>river: bh1750
+dev.bh1750.<unit>.<unit>esc: BH1750 Ambient Light Sensor module
+.Ed
+.Sh SYSCTL VARIABLES
+The following variables are available:
+.Bl -tag -width indent
+.It Va dev.bh1750.<unit>.mtreg
+MTreg value (default: 69). The measurement time register is used to increase a
+measurement sensivity by increasing a measurment time;
+.It Va dev.bh1750.<unit>.quality-lack
+Lack of quality from 0 to 50 (default: 0), %. The reduced quality of a specific
+IC requires an increase in measurement readiness time at the same sensivity.
+.It Va dev.bh1750.<unit>.ready-time
+Measurement time, usec. Depends on MTReg value;
+.It Va dev.bh1750.<unit>.counts
+Raw measurement data. The last measurement value stored in IC register;
+.It Va dev.bh1750.<unit>.illuminance
+Light intensity, mlx. The illuminance value equal to
+.Pa counts
+* 1000 / 1.2 * (69 / mtreg);
+.El
+.Sh FDT CONFIGURATION
+On an
+.Xr fdt 4
+based system, a
+.Nm
+device is defined as a slave device subnode of the i2c bus controller node.
+.Pp
+The following properties are required in the
+.Nm
+device subnode:
+.Bl -tag -width indent
+.It Va compatible
+Must be "bh1750".
+.It Va reg
+I2c slave address of device.
+.El
+.Ss Example of adding a sensor with an overlay
+.Bd -unfilled -offset indent
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "allwinner,sun8i-h3";
+};
+
+&i2c0 {
+    bh1750: bh1750@23 {
+        compatible = "bh1750";
+        #address-cells = <1>;
+        #size-cells = <0>;
+        mtreg = <0x45>;
+        reg = <0x23>;
+        quality-lack = <20>;
+        status = "okay";
+    };
+};
+.Ed
+.Sh SEE ALSO
+.Xr sysctl 8 ,
+.Xr loader.conf 5 ,
+.Xr fdt 4
+.Sh AUTHORS
+The
+.Nm
+device driver was written by
+.An Alexander Mishin Aq Mt mishin@mh.net.ru .

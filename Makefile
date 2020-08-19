@@ -2,7 +2,7 @@
 
 KMOD=bh1750
 SRCS=bh1750.c
-SUBDIR=fdt-overlay
+SUBDIR=fdt-overlay man
 
 SRCS+=	\
 	bus_if.h \
