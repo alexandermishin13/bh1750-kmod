@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (C) 2020 Alexander Mishin
+ * Copyright (C) 2020, Alexander Mishin
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -137,23 +137,23 @@ bh1750_probe(device_t dev)
 {
 
 #ifdef FDT
-    const struct ofw_compat_data *compat;
+	const struct ofw_compat_data *compat;
 
-    if (!ofw_bus_status_okay(dev))
-	return (ENXIO);
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
 
-    compat = ofw_bus_search_compatible(dev, bh1750_compat_data);
+	compat = ofw_bus_search_compatible(dev, bh1750_compat_data);
 
-    if (compat->ocd_str == NULL)
-	return (ENXIO);
+	if (compat->ocd_str == NULL)
+		return (ENXIO);
 
-    device_set_desc(dev, (const char *)compat->ocd_data);
+	device_set_desc(dev, (const char *)compat->ocd_data);
 
-    return (BUS_PROBE_DEFAULT);
+	return (BUS_PROBE_DEFAULT);
 #else
-    device_set_desc(dev, "BH1750 Ambient Light Sensor module");
+	device_set_desc(dev, "BH1750 Ambient Light Sensor module");
 
-    return (BUS_PROBE_NOWILDCARD);
+	return (BUS_PROBE_NOWILDCARD);
 #endif
 
 }
