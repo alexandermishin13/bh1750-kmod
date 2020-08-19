@@ -95,6 +95,7 @@ static int bh1750_detach(device_t);
 
 static void bh1750_sysctl_register(struct bh1750_softc*);
 static void bh1750_poll(void*, int);
+static void bh1750_start(void *sc);
 
 static int bh1750_fdt_get_params(struct bh1750_softc*);
 static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
@@ -171,7 +172,7 @@ bh1750_detach(device_t dev)
 	if (sc->mtreg > 0)
 		bh1750_write(sc, BH1750_POWER_DOWN);
 
-    return (0);
+	return (0);
 }
 
 /* Device _attach() method */
@@ -185,28 +186,11 @@ bh1750_attach(device_t dev)
 	sc->node = ofw_bus_get_node(dev);
 	sc->mtreg_params = &bh1750_mtreg_params;
 
-	/* Check if device is connected but return OK anyway
-	 * to keep the device numbering
+	/*
+	 * We have to wait until interrupts are enabled.  Sometimes I2C read
+	 * and write only works when the interrupts are available.
 	 */
-	if (bh1750_write(sc, BH1750_POWER_ON) != 0) {
-		device_printf(dev, "failed to connect to the device\n");
-		return (0);
-	}
-
-	bh1750_fdt_get_params(sc);
-
-	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
-
-	/* 
-	 * Do an initial read so we have correct values for reporting before
-	 * registering the sysctls that can access those values. This also
-	 * schedules the periodic polling the driver does every few seconds to
-	 * update the sysctl variables.
-	 */
-	bh1750_poll(sc, 0);
-
-	/* Add sysctl variables */
-	bh1750_sysctl_register(sc);
+	config_intrhook_oneshot(bh1750_start, sc);
 
 	return (0);
 }
@@ -225,69 +209,69 @@ bh1750_poll(void *arg, int pending __unused)
 static int
 bh1750_set_quality(struct bh1750_softc *sc, uint16_t quality_lack)
 {
-    /* up to 50% by the datasheet */
-    if (quality_lack > 50)
-	return (-1);
+	/* up to 50% by the datasheet */
+	if (quality_lack > 50)
+		return (-1);
 
-    /* Lack of quality leads to increasing of ready-time */
-    sc->quality_lack = quality_lack;
-    sc->ready_time = sc->ready_time \
-	* (100 + quality_lack) / 100;
+	/* Lack of quality leads to increasing of ready-time */
+	sc->quality_lack = quality_lack;
+	sc->ready_time = sc->ready_time \
+	    * (100 + quality_lack) / 100;
 
-    return (0);
+	return (0);
 }
 
 static int
 bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 {
-    int ret;
-    uint8_t mt_byte;
+	int ret;
+	uint8_t mt_byte;
 
-    // Power down the device before changes
-    ret = bh1750_write(sc, BH1750_POWER_DOWN);
-    if (ret)
-	return (ret);
+	// Power down the device before changes
+	ret = bh1750_write(sc, BH1750_POWER_DOWN);
+	if (ret)
+		return (ret);
 
-    // Transfer hight byte of MTreg
-    mt_byte = mtreg_val >> BH1750_MTREG_BYTE_LEN;
-    ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
-    if (ret)
-	return (ret);
-    
-    // Transfer low byte of MTreg
-    mt_byte = mtreg_val & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
-    ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
-    if (ret)
-	return (ret);
+	// Transfer hight byte of MTreg
+	mt_byte = mtreg_val >> BH1750_MTREG_BYTE_LEN;
+	ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
+	if (ret)
+		return (ret);
 
-    sc->mtreg = mtreg_val;
-    sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
-	* (100 + sc->quality_lack) / 100;
+	// Transfer low byte of MTreg
+	mt_byte = mtreg_val & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
+	ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
+	if (ret)
+		return (ret);
 
-    return (0);
+	sc->mtreg = mtreg_val;
+	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
+	    * (100 + sc->quality_lack) / 100;
+
+	return (0);
 }
 
 static int
 bh1750_set_measure_time(struct bh1750_softc *sc, unsigned long ready_usec)
 {
-    int ret;
-    uint16_t val;
-    const struct bh1750_mtreg_t *mtreg = sc->mtreg_params;
+	int ret;
+	uint16_t val;
+	const struct bh1750_mtreg_t *mtreg = sc->mtreg_params;
 
-    // Check if it a valid time value
-    if (ready_usec % mtreg->step_usec != 0)
-	return EINVAL;
+	// Check if it a valid time value
+	if (ready_usec % mtreg->step_usec != 0)
+		return EINVAL;
 
-    // Check for MTreg range
-    val = ready_usec / mtreg->step_usec;
-    if (val < mtreg->val_min || val > mtreg->val_max)
-	return EINVAL;
+	// Check for MTreg range
+	val = ready_usec / mtreg->step_usec;
+	if (val < mtreg->val_min || val > mtreg->val_max)
+		return EINVAL;
 
-    ret = bh1750_set_mtreg(sc, val);
-    if (ret)
-	return (ret);
+	ret = bh1750_set_mtreg(sc, val);
+	if (ret)
+		return (ret);
 
-    return 0;
+	return 0;
 }
 
 /* Write command */
@@ -503,4 +487,32 @@ bh1750_fdt_get_params(struct bh1750_softc *sc)
     }
 
     return (0);
+}
+
+static void
+bh1750_start(void *arg)
+{
+	struct bh1750_softc *sc;
+	sc = arg;
+
+	/* Check if device is connected */
+	if (bh1750_write(sc, BH1750_POWER_ON) != 0) {
+		device_printf(sc->dev, "failed to connect to the device\n");
+		return;
+	}
+
+	bh1750_fdt_get_params(sc);
+
+	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
+
+	/* 
+	 * Do an initial read so we have correct values for reporting before
+	 * registering the sysctls that can access those values. This also
+	 * schedules the periodic polling the driver does every few seconds to
+	 * update the sysctl variables.
+	 */
+	bh1750_poll(sc, 0);
+
+	/* Add sysctl variables */
+	bh1750_sysctl_register(sc);
 }
