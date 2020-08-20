@@ -1,9 +1,9 @@
 # $FreeBSD$
 
-SHARE= /usr/local/share
+PREFIX= /usr/local
 
 MAN= bh1750.4
-MANDIR= ${SHARE}/man/man
+MANDIR= ${PREFIX}/man/man
 
 MANFULLDIR= ${DESTDIR}${MANDIR}4
 
