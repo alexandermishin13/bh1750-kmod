@@ -1,0 +1,16 @@
+# You can override the included template(s) by including variable overrides
+# See https://docs.gitlab.com/ee/user/application_security/sast/#customizing-the-sast-settings
+# Note that environment variables can be set in several places
+# See https://docs.gitlab.com/ee/ci/variables/#priority-of-environment-variables
+stages:
+- test
+variables:
+  SECURE_ANALYZERS_PREFIX: registry.gitlab.com/gitlab-org/security-products/analyzers
+sast:
+  variables:
+    SAST_ANALYZER_IMAGE_TAG: '2'
+    SAST_EXCLUDED_PATHS: spec, test, tests, tmp
+    SEARCH_MAX_DEPTH: '4'
+  stage: test
+include:
+- template: Security/SAST.gitlab-ci.yml
