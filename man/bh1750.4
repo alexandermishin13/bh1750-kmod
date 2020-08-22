@@ -57,6 +57,7 @@ dev.bh1750.<unit>.ready-time: 180090
 dev.bh1750.<unit>.quality-lack: 50
 dev.bh1750.<unit>.mtreg: 69
 dev.bh1750.<unit>.illuminance: 84166
+dev.bh1750.<unit>.sensitivity: 833
 dev.bh1750.<unit>.counts: 101
 dev.bh1750.<unit>.%parent: iicbus0
 dev.bh1750.<unit>.%pnpinfo: name=bh1750@23 compat=bh1750
@@ -72,15 +73,17 @@ MTreg value (default: 69). The measurement time register is used to increase a
 measurement sensivity by increasing a measurment time;
 .It Va dev.bh1750.<unit>.quality-lack
 Lack of quality from 0 to 50 (default: 0), %. The reduced quality of a specific
-IC requires an increase in measurement readiness time at the same sensivity.
+IC requires an increase in measurement readiness time at the same sensivity;
 .It Va dev.bh1750.<unit>.ready-time
-Measurement time, usec. Depends on MTReg value;
+Predicted measurement time, usec. Depends on MTReg value and increases by
+quality lack percents;
 .It Va dev.bh1750.<unit>.counts
 Raw measurement data. The last measurement value stored in IC register;
+.It Va dev.bh1750.<unit>.sensitivity
+A range for illuminance value changed per one count, mlx/counts. Depends on
+MTReg value;
 .It Va dev.bh1750.<unit>.illuminance
-Light intensity, mlx. The illuminance value equal to
-.Pa counts
-* 1000 / 1.2 * (69 / mtreg);
+Light intensity value for measured counts, mlx.
 .El
 .Sh FDT CONFIGURATION
 On an
