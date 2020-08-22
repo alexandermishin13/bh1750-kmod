@@ -254,29 +254,6 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 	return (0);
 }
 
-static int
-bh1750_set_measure_time(struct bh1750_softc *sc, unsigned long ready_usec)
-{
-	int ret;
-	uint16_t val;
-	const struct bh1750_mtreg_t *mtreg = sc->mtreg_params;
-
-	// Check if it a valid time value
-	if (ready_usec % mtreg->step_usec != 0)
-		return EINVAL;
-
-	// Check for MTreg range
-	val = ready_usec / mtreg->step_usec;
-	if (val < mtreg->val_min || val > mtreg->val_max)
-		return EINVAL;
-
-	ret = bh1750_set_mtreg(sc, val);
-	if (ret)
-		return (ret);
-
-	return 0;
-}
-
 /* Write command */
 static int
 bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
