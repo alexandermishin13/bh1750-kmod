@@ -77,16 +77,18 @@ bh1750_mtreg_params = { 0x1f, 0xfe, 0x45, DIV_CEIL(120000, 0x45) };
 
 struct bh1750_softc {
     device_t			 dev;
-    uint8_t			 addr;
     phandle_t			 node;
-    unsigned long		 illuminance;
-    unsigned long		 ready_time;
-    uint16_t			 counts;
-    uint16_t			 mtreg;
+    uint8_t			 addr;
     uint8_t			 quality_lack;
+    bool			 detaching;
+    uint16_t			 mtreg;
+    uint16_t			 counts;
+    unsigned long		 illuminance;
+    unsigned long		 sensitivity;
+    unsigned long		 ready_time;
+    unsigned long		 k;
     const struct bh1750_mtreg_t	*mtreg_params;
     struct timeout_task		 task;
-    bool			 detaching;
 };
 
 static int bh1750_probe(device_t);
@@ -240,11 +242,12 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 
 	// Transfer low byte of MTreg
 	mt_byte = mtreg_val & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
-	ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
+	ret = bh1750_write(sc, BH1750_MTREG_L_BYTE | mt_byte);
 	if (ret)
 		return (ret);
 
 	sc->mtreg = mtreg_val;
+	sc->sensitivity = sc->k / mtreg_val;
 	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
 	    * (100 + sc->quality_lack) / 100;
 
@@ -330,11 +333,6 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
-	/* For H-resolution:
-	   milli_lux = counts * 1000 * (10 / 12) * (69 / MTReg)
-	 */
-	unsigned long k = 57500;
-
 	if (bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE) != 0)
 		return (-1);
 
@@ -344,7 +342,7 @@ bh1750_read_data(struct bh1750_softc *sc)
 		return (-1);
 
 	/* milli lux */
-	sc->illuminance = k * sc->counts / sc->mtreg;
+	sc->illuminance = sc->k * sc->counts / sc->mtreg;
 
 	return (0);
 }
@@ -408,6 +406,10 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
     SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "counts",
 	CTLFLAG_RD,
 	&sc->counts, 0, "raw measurement data");
+
+    SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "sensitivity",
+	CTLFLAG_RD,
+	&sc->sensitivity, "measure sensitivity, mlx/counts");
 
     SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
 	CTLFLAG_RD,
@@ -500,6 +502,11 @@ bh1750_start(void *arg)
 		device_printf(sc->dev, "failed to connect to the device\n");
 		return;
 	}
+
+	/* For H-resolution:
+	   milli_lux = counts * 1000 * (10 / 12) * (69 / MTReg)
+	 */
+	sc->k = 1000 * 10 * sc->mtreg_params->val_default / 12;
 
 	bh1750_fdt_get_params(sc);
 
