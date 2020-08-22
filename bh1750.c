@@ -350,21 +350,25 @@ bh1750_read_data(struct bh1750_softc *sc)
 static int
 bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 {
-    struct bh1750_softc *sc = arg1;
-    uint16_t _mtreg = (uint16_t)sc->mtreg;
-    int error = 0;
+	struct bh1750_softc *sc = arg1;
+	uint16_t _mtreg = (uint16_t)sc->mtreg;
+	int error = 0;
 
-    error = SYSCTL_OUT(req, &_mtreg, sizeof(_mtreg));
-    if (error != 0 || req->newptr == NULL)
+	error = SYSCTL_OUT(req, &_mtreg, sizeof(_mtreg));
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	error = SYSCTL_IN(req, &_mtreg, sizeof(_mtreg));
+	if (error != 0)
+		return (error);
+
+	if (_mtreg < sc->mtreg_params->val_min ||
+	    _mtreg > sc->mtreg_params->val_max)
+		return (EINVAL);
+
+	error = bh1750_set_mtreg(sc, _mtreg);
+
 	return (error);
-
-    error = SYSCTL_IN(req, &_mtreg, sizeof(_mtreg));
-    if (error != 0)
-	return (error);
-
-    error = bh1750_set_mtreg(sc, _mtreg);
-
-    return (error);
 }
 
 static int
