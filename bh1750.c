@@ -266,7 +266,7 @@ bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 
     for (;;)
     {
-	if (iicbus_transfer(sc->dev, msg, 1) == 0)
+	if (iicbus_transfer_excl(sc->dev, msg, 1, IIC_INTRWAIT) == 0)
 	    return (0);
 	if (++try > 5) {
 	    device_printf(sc->dev, "iicbus write failed\n");
@@ -292,7 +292,7 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
     try = 0;
     for (;;)
     {
-	if (iicbus_transfer(sc->dev, msg, 1) == 0)
+	if (iicbus_transfer_excl(sc->dev, msg, 1, IIC_INTRWAIT) == 0)
 	    break;
 	if (++try > 5) {
 	    device_printf(sc->dev, "iicbus read failed\n");
