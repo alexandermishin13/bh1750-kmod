@@ -16,6 +16,13 @@ make depend
 make
 sudo make install
 ```
+You may need to edit fdt-overlay sources for Your needs, make and
+install them:
+```
+cd fdt-overlay
+make
+sudo make install
+```
 Append an overlay to "/boot/loader.conf" and reboot:
 <pre><code>
 fdt_overlays="sun8i-h3-sid,sun8i-h3-ths<b>,sun8i-h3-bh1750-i2c0</b>"
@@ -29,4 +36,6 @@ sysctl dev.bh1750.0
 
 ## Status
 
-The driver was tested on two sensors at once with addresses 0x23 and 0x5c.
+The driver has been tested on "Raspberry PI 2" and "Orange PI PC".
+During testing, two sensors with addresses 0x23 and 0x5С were used
+simultaneously.
