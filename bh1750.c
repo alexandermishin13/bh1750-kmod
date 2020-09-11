@@ -258,52 +258,37 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 static int
 bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 {
-    int try = 0;
+	int err = 0;
+	struct iic_msg msg;
 
-    struct iic_msg msg[] = {
-	{sc->addr, IIC_M_WR, 1, &(opecode)}
-    };
+	msg.slave = sc->addr;
+	msg.flags = IIC_M_WR;
+	msg.len   = 1;
+	msg.buf   = &opecode;
 
-    for (;;)
-    {
-	if (iicbus_transfer_excl(sc->dev, msg, 1, IIC_INTRWAIT) == 0)
-	    return (0);
-	if (++try > 5) {
-	    device_printf(sc->dev, "iicbus write failed\n");
-	    return (-1);
-	}
-	pause("bh1750_write", hz);
-    }
+	err = iicbus_transfer_excl(sc->dev, &msg, 1, IIC_INTRWAIT);
 
-    return (0);
+	return (err);
 }
 
 /* Read data */
 static int
 bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 {
-    int try = 0;
-    uint16_t be_result;
+	int err = 0;
+	uint16_t be_result;
+	struct iic_msg msg;
 
-    struct iic_msg msg[] = {
-	{sc->addr, IIC_M_RD, 2, (uint8_t *)&be_result}
-    };
+	msg.slave = sc->addr;
+	msg.flags = IIC_M_RD;
+	msg.len   = 2;
+	msg.buf   = (uint8_t *)&be_result;
 
-    try = 0;
-    for (;;)
-    {
-	if (iicbus_transfer_excl(sc->dev, msg, 1, IIC_INTRWAIT) == 0)
-	    break;
-	if (++try > 5) {
-	    device_printf(sc->dev, "iicbus read failed\n");
-	    return (-1);
-	}
-	pause("bh1750_read", hz);
-    }
+	err = iicbus_transfer_excl(sc->dev, &msg, 1, IIC_INTRWAIT);
+	if (!err)
+		*result = be16toh(be_result);
 
-    *result = be16toh(be_result);
-
-    return (0);
+	return (err);
 }
 
 /* Read the sensor data*/
