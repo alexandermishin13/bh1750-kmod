@@ -53,6 +53,7 @@
 
 #define BH1750_POWER_DOWN		0x00
 #define BH1750_POWER_ON			0x01
+#define BH1750_RESET			0x07
 #define BH1750_ONE_TIME_H_RES_MODE	0x20
 #define BH1750_MTREG_H_BYTE		0x40
 #define BH1750_MTREG_L_BYTE		0x60
@@ -81,6 +82,7 @@ struct bh1750_softc {
     uint8_t			 addr;
     uint8_t			 quality_lack;
     bool			 detaching;
+    bool			 mtreg_set;
     uint16_t			 mtreg;
     uint16_t			 counts;
     unsigned long		 illuminance;
@@ -107,6 +109,7 @@ static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
 static int bh1750_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
+static int bh1750_write_mtreg(struct bh1750_softc*);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
     {"bh1750", (uintptr_t)"BH1750 Ambient Light Sensor module"},
@@ -223,8 +226,27 @@ bh1750_set_quality(struct bh1750_softc *sc, uint16_t quality_lack)
 	return (0);
 }
 
+/* Set MTreg value and recalculate dependent parameters */
 static int
 bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
+{
+	if (mtreg_val < sc->mtreg_params->val_min ||
+	    mtreg_val > sc->mtreg_params->val_max)
+		return (EINVAL);
+
+	sc->mtreg = mtreg_val;
+	sc->sensitivity = sc->k / mtreg_val;
+	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
+	    * (100 + sc->quality_lack) / 100;
+
+	sc->mtreg_set = false;
+
+	return (0);
+}
+
+/* write MTreg value to the sensor */
+static int
+bh1750_write_mtreg(struct bh1750_softc *sc)
 {
 	int ret;
 	uint8_t mt_byte;
@@ -235,21 +257,16 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 		return (ret);
 
 	// Transfer hight byte of MTreg
-	mt_byte = mtreg_val >> BH1750_MTREG_BYTE_LEN;
+	mt_byte = sc->mtreg >> BH1750_MTREG_BYTE_LEN;
 	ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
 	if (ret)
 		return (ret);
 
 	// Transfer low byte of MTreg
-	mt_byte = mtreg_val & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
+	mt_byte = sc->mtreg & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
 	ret = bh1750_write(sc, BH1750_MTREG_L_BYTE | mt_byte);
 	if (ret)
 		return (ret);
-
-	sc->mtreg = mtreg_val;
-	sc->sensitivity = sc->k / mtreg_val;
-	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
-	    * (100 + sc->quality_lack) / 100;
 
 	return (0);
 }
@@ -295,10 +312,16 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
+	/* Write new MTreg value and set flag if it didn't yet */
+	if (!sc->mtreg_set) {
+		bh1750_write_mtreg(sc);
+		sc->mtreg_set = true;
+	}
+
 	if (bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE) != 0)
 		return (-1);
 
-	DELAY(DIV_CEIL(sc->ready_time, 1000));
+	DELAY(sc->ready_time);
 
 	if (bh1750_read(sc, &sc->counts) != 0)
 		return (-1);
@@ -314,7 +337,7 @@ bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct bh1750_softc *sc = arg1;
 	uint16_t _mtreg = (uint16_t)sc->mtreg;
-	int error = 0;
+	int error;
 
 	error = SYSCTL_OUT(req, &_mtreg, sizeof(_mtreg));
 	if (error != 0 || req->newptr == NULL)
@@ -323,10 +346,6 @@ bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 	error = SYSCTL_IN(req, &_mtreg, sizeof(_mtreg));
 	if (error != 0)
 		return (error);
-
-	if (_mtreg < sc->mtreg_params->val_min ||
-	    _mtreg > sc->mtreg_params->val_max)
-		return (EINVAL);
 
 	error = bh1750_set_mtreg(sc, _mtreg);
 
@@ -420,6 +439,7 @@ bh1750_fdt_get_params(struct bh1750_softc *sc)
     else
 	bh1750_set_mtreg(sc, sc->mtreg_params->val_default);
 
+    /* Set quality lack percent if found */
     quality_found = OF_getencprop(sc->node, "quality-lack", &pquality, sizeof(pquality));
     if (quality_found > 0)
     {
