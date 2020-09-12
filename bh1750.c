@@ -82,7 +82,6 @@ struct bh1750_softc {
     uint8_t			 addr;
     uint8_t			 quality_lack;
     bool			 detaching;
-    bool			 mtreg_set;
     uint16_t			 mtreg;
     uint16_t			 counts;
     unsigned long		 illuminance;
@@ -230,16 +229,31 @@ bh1750_set_quality(struct bh1750_softc *sc, uint16_t quality_lack)
 static int
 bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 {
+	int error;
+
+	/* Check the MTreg range */
 	if (mtreg_val < sc->mtreg_params->val_min ||
 	    mtreg_val > sc->mtreg_params->val_max)
 		return (EINVAL);
 
+	/* to be sure the task with old MTreg is canceled or finished */
+	while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
+		taskqueue_drain_timeout(taskqueue_thread, &sc->task);
+
+	/* set and recalculate */
 	sc->mtreg = mtreg_val;
 	sc->sensitivity = sc->k / mtreg_val;
 	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
 	    * (100 + sc->quality_lack) / 100;
 
-	sc->mtreg_set = false;
+	/* Write the MTreg to the sensor. If error start the polling anyway */
+	error = bh1750_write_mtreg(sc);
+	if (error)
+	    device_printf(sc->dev,
+		"could not write MTreg value\n");
+
+	/* Get the measurement value and start the polling again */
+	bh1750_poll(sc, 0);
 
 	return (0);
 }
@@ -248,34 +262,32 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 static int
 bh1750_write_mtreg(struct bh1750_softc *sc)
 {
-	int ret;
+	int error;
 	uint8_t mt_byte;
 
 	// Power down the device before changes
-	ret = bh1750_write(sc, BH1750_POWER_DOWN);
-	if (ret)
-		return (ret);
+	error = bh1750_write(sc, BH1750_POWER_DOWN);
+	if (error)
+		return (error);
 
 	// Transfer hight byte of MTreg
 	mt_byte = sc->mtreg >> BH1750_MTREG_BYTE_LEN;
-	ret = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
-	if (ret)
-		return (ret);
+	error = bh1750_write(sc, BH1750_MTREG_H_BYTE | mt_byte);
+	if (error)
+		return (error);
 
 	// Transfer low byte of MTreg
 	mt_byte = sc->mtreg & ((0x01 << BH1750_MTREG_BYTE_LEN) - 1);
-	ret = bh1750_write(sc, BH1750_MTREG_L_BYTE | mt_byte);
-	if (ret)
-		return (ret);
+	error = bh1750_write(sc, BH1750_MTREG_L_BYTE | mt_byte);
 
-	return (0);
+	return (error);
 }
 
 /* Write command */
 static int
 bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 {
-	int err = 0;
+	int error = 0;
 	struct iic_msg msg;
 
 	msg.slave = sc->addr;
@@ -283,16 +295,16 @@ bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 	msg.len   = 1;
 	msg.buf   = &opecode;
 
-	err = iicbus_transfer_excl(sc->dev, &msg, 1, IIC_INTRWAIT);
+	error = iicbus_transfer_excl(sc->dev, &msg, 1, IIC_INTRWAIT);
 
-	return (err);
+	return (error);
 }
 
 /* Read data */
 static int
 bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 {
-	int err = 0;
+	int error = 0;
 	uint16_t be_result;
 	struct iic_msg msg;
 
@@ -301,23 +313,17 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 	msg.len   = 2;
 	msg.buf   = (uint8_t *)&be_result;
 
-	err = iicbus_transfer_excl(sc->dev, &msg, 1, IIC_INTRWAIT);
-	if (!err)
+	error = iicbus_transfer_excl(sc->dev, &msg, 1, IIC_INTRWAIT);
+	if (!error)
 		*result = be16toh(be_result);
 
-	return (err);
+	return (error);
 }
 
 /* Read the sensor data*/
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
-	/* Write new MTreg value and set flag if it didn't yet */
-	if (!sc->mtreg_set) {
-		bh1750_write_mtreg(sc);
-		sc->mtreg_set = true;
-	}
-
 	if (bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE) != 0)
 		return (-1);
 
@@ -494,9 +500,10 @@ bh1750_start(void *arg)
 	 */
 	sc->k = 1000 * 10 * sc->mtreg_params->val_default / 12;
 
-	bh1750_fdt_get_params(sc);
-
+	/* Init the polling task */
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
+
+	bh1750_fdt_get_params(sc);
 
 	/* 
 	 * Do an initial read so we have correct values for reporting before
