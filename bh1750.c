@@ -81,6 +81,7 @@ struct bh1750_softc {
     phandle_t			 node;
     uint8_t			 addr;
     uint8_t			 quality_lack;
+    uint8_t			 polltime;
     bool			 detaching;
     uint16_t			 mtreg;
     uint16_t			 counts;
@@ -207,7 +208,7 @@ bh1750_poll(void *arg, int pending __unused)
 	bh1750_read_data(sc);
 	if (!sc->detaching)
 		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
-		    BH1750_POLLTIME * SBT_1S, 0, C_PREL(3));
+		    sc->polltime * SBT_1S, 0, C_PREL(3));
 }
 
 static int
@@ -398,6 +399,10 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 	CTLFLAG_RD,
 	&sc->counts, 0, "raw measurement data");
 
+    SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling",
+	CTLFLAG_RD,
+	&sc->polltime, 0, "polling period, s");
+
     SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "sensitivity",
 	CTLFLAG_RD,
 	&sc->sensitivity, "measure sensitivity, mlx/counts");
@@ -499,6 +504,8 @@ bh1750_start(void *arg)
 	   milli_lux = counts * 1000 * (10 / 12) * (69 / MTReg)
 	 */
 	sc->k = 1000 * 10 * sc->mtreg_params->val_default / 12;
+
+	sc->polltime = BH1750_POLLTIME;
 
 	/* Init the polling task */
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
