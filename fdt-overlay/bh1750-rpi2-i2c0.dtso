@@ -14,7 +14,8 @@
 	mtreg = <0x45>;
 	reg = <0x23>;
 	/* Up to 50% if You need to increase ready-time */
-	//quality-lack = <50>;
+	//quality-lack = <0>;
+	//polling-time = <5>;
 	status = "okay";
     };
 };

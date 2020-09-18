@@ -103,7 +103,8 @@ static void bh1750_start(void *sc);
 
 static int bh1750_fdt_get_params(struct bh1750_softc*);
 static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
-static int bh1750_set_quality(struct bh1750_softc*, uint16_t);
+static int bh1750_set_quality(struct bh1750_softc*, uint8_t);
+static int bh1750_set_polltime(struct bh1750_softc*, uint8_t);
 static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
 
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
@@ -211,8 +212,19 @@ bh1750_poll(void *arg, int pending __unused)
 		    sc->polltime * SBT_1S, 0, C_PREL(3));
 }
 
+/* Sets the time period of polling */
 static int
-bh1750_set_quality(struct bh1750_softc *sc, uint16_t quality_lack)
+bh1750_set_polltime(struct bh1750_softc *sc, uint8_t polltime)
+{
+	/* Lack of quality leads to increasing of ready-time */
+	sc->polltime = polltime;
+
+	return (0);
+}
+
+/* Sets the time penalty in percents for low-quality chips */
+static int
+bh1750_set_quality(struct bh1750_softc *sc, uint8_t quality_lack)
 {
 	/* up to 50% by the datasheet */
 	if (quality_lack > 50)
@@ -399,7 +411,7 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 	CTLFLAG_RD,
 	&sc->counts, 0, "raw measurement data");
 
-    SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling",
+    SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling-time",
 	CTLFLAG_RD,
 	&sc->polltime, 0, "polling period, s");
 
@@ -429,10 +441,10 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 static int
 bh1750_fdt_get_params(struct bh1750_softc *sc)
 {
-    pcell_t pmtreg, pquality;
+    pcell_t pmtreg, pquality, ppolltime;
     uint16_t mtreg;
-    uint8_t quality;
-    int mtreg_found, quality_found;
+    uint8_t quality, polltime;
+    int mtreg_found, quality_found, polltime_found;
 
     /* If no "mtreg" parameter is set the default value will be applied*/
     mtreg_found = OF_getencprop(sc->node, "mtreg", &pmtreg, sizeof(pmtreg));
@@ -454,7 +466,7 @@ bh1750_fdt_get_params(struct bh1750_softc *sc)
     quality_found = OF_getencprop(sc->node, "quality-lack", &pquality, sizeof(pquality));
     if (quality_found > 0)
     {
-	quality = (uint16_t)pquality;
+	quality = (uint8_t)pquality;
 //	if ((quality != pquality) || (bh1750_set_quality(sc, quality) != 0))
 	if (bh1750_set_quality(sc, quality) != 0)
 	{
@@ -466,6 +478,23 @@ bh1750_fdt_get_params(struct bh1750_softc *sc)
     }
     else
 	bh1750_set_quality(sc, 0);
+
+    /* Set polling period if found */
+    polltime_found = OF_getencprop(sc->node, "polling-time", &ppolltime, sizeof(ppolltime));
+    if (polltime_found > 0)
+    {
+	polltime = (uint8_t)ppolltime;
+//	if ((polltime != ppolltime) || (bh1750_set_polltime(sc, polltime) != 0))
+	if (bh1750_set_polltime(sc, polltime) != 0)
+	{
+	    device_printf(sc->dev,
+		"could not acquire correct polling-time value from DTS\n");
+
+	    return (EINVAL);
+	}
+    }
+    else
+	bh1750_set_polltime(sc, BH1750_POLLTIME);
 
     /* Print more details */
     if (bootverbose)
@@ -483,6 +512,13 @@ bh1750_fdt_get_params(struct bh1750_softc *sc)
 	else
 	    device_printf(sc->dev,
 		"Acquired quality-lack: 0x%0x by default\n", sc->quality_lack);
+
+	if (polltime_found > 0)
+	    device_printf(sc->dev,
+		"Acquired polling-time: 0x%0x from DTS\n", sc->polltime);
+	else
+	    device_printf(sc->dev,
+		"Acquired polling-time: 0x%0x by default\n", sc->polltime);
     }
 
     return (0);
