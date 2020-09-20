@@ -58,6 +58,7 @@ dev.bh1750.<unit>.quality-lack: 50
 dev.bh1750.<unit>.mtreg: 69
 dev.bh1750.<unit>.illuminance: 84166
 dev.bh1750.<unit>.sensitivity: 833
+dev.bh1750.<unit>.polling-time: 2
 dev.bh1750.<unit>.counts: 101
 dev.bh1750.<unit>.%parent: iicbus0
 dev.bh1750.<unit>.%pnpinfo: name=bh1750@23 compat=bh1750
@@ -82,6 +83,9 @@ Raw measurement data. The last measurement value stored in IC register;
 .It Va dev.bh1750.<unit>.sensitivity
 A range for illuminance value changed per one count, mlx/counts. Depends on
 MTReg value;
+.It Va dev.bh1750.<unit>.polling-time
+Time period for polling the sensor and updating the results by the kernel
+driver. From 1 to 255 seconds;
 .It Va dev.bh1750.<unit>.illuminance
 Light intensity value for measured counts, mlx.
 .El

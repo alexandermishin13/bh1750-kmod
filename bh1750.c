@@ -216,7 +216,10 @@ bh1750_poll(void *arg, int pending __unused)
 static int
 bh1750_set_polltime(struct bh1750_softc *sc, uint8_t polltime)
 {
-	/* Lack of quality leads to increasing of ready-time */
+	/* Time period for updating the results */
+	if (polltime == 0)
+		return (-1);
+
 	sc->polltime = polltime;
 
 	return (0);
@@ -413,7 +416,7 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 
     SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling-time",
 	CTLFLAG_RD,
-	&sc->polltime, 0, "polling period, s");
+	&sc->polltime, 0, "polling period from 1 to 255, s");
 
     SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "sensitivity",
 	CTLFLAG_RD,
