@@ -36,6 +36,7 @@ sysctl dev.bh1750.0
 
 ## Status
 
-The driver has been tested on "Raspberry PI 2" and "Orange PI PC".
+The driver has been tested on "Raspberry Pi 2", "Orange Pi PC" and
+"Orange Pi Zero" (sun8i-h2-plus-i2c0.dtbo is also needed).
 During testing, two sensors with addresses 0x23 and 0x5С were used
 simultaneously.
