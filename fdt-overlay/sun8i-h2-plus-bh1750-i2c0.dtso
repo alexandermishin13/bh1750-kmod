@@ -1,0 +1,21 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "allwinner,sun8i-h2-plus";
+};
+
+&i2c0 {
+    bh1750: bh1750@23 {
+	compatible = "bh1750";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	/* MTreg = 69 by default for bh1750 */
+	mtreg = <0x45>;
+	reg = <0x23>;
+	/* Up to 50% if You need to increase ready-time */
+	//quality-lack = <0>;
+	//polling-time = <5>;
+	status = "okay";
+    };
+};
