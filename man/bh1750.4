@@ -119,9 +119,10 @@ I2c slave address of device.
         compatible = "bh1750";
         #address-cells = <1>;
         #size-cells = <0>;
-        mtreg = <0x45>;
-        reg = <0x23>;
-        quality-lack = <20>;
+        mtreg = <0x45>;     //up to <0xfe> for best sensivity
+        reg = <0x23>;       //or <0x5c>, see datasheet
+        quality-lack = <0>; //up to <50> if IC quality is worst (optional)
+        polling-time = <5>; //up to 255 sec (optional)
         status = "okay";
     };
 };
