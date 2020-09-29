@@ -43,9 +43,6 @@
 #include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
-#define DIV_CEIL(a, b) (((a) / (b)) + (((a) % (b)) > 0 ? 1 : 0))
-#define DIV_ROUND_UINT(a, b) ((((a) + (b)/2) / (b)))
-
 #define	BH1750_POLLTIME			5	/* in seconds */
 
 /* Number of bits in high or low parts of MTreg */
@@ -54,10 +51,8 @@
 #define BH1750_POWER_DOWN		0x00
 #define BH1750_POWER_ON			0x01
 #define BH1750_RESET			0x07
-#define BH1750_ONE_TIME_H_RES_MODE	0x20
 #define BH1750_MTREG_H_BYTE		0x40
 #define BH1750_MTREG_L_BYTE		0x60
-#define BH1750_DATA_READY_TIME		0x80	/* ~120 ms */
 
 #ifdef FDT
 #include <dev/ofw/openfirm.h>
@@ -71,10 +66,33 @@ struct bh1750_mtreg_t {
     uint16_t val_default;
     unsigned long step_usec;
 };
+struct bh1750_mode_t {
+    uint8_t opecode;
+    unsigned long k;
+};
 
 /* step_usec = ceil(chip_data_ready_usec / mtreg_value) */
 static const struct bh1750_mtreg_t
-bh1750_mtreg_params = { 0x1f, 0xfe, 0x45, DIV_CEIL(120000, 0x45) };
+bh1750_mtreg_params =
+{
+    .val_min = 0x1f,
+    .val_max = 0xfe,
+    .val_default = 0x45,
+    .step_usec = 0x6cc
+};
+
+/* For H-resolution:
+   milli_lux = (counts / 1.2) * (MTReg_default / MTReg) * 1000
+   thus,
+   k = MTReg_default/1.2 * 1000
+ */
+
+static const struct bh1750_mode_t
+bh1750_mode_params[] =
+{
+    { .opecode = 0x20, .k = 0xe09c },
+    { .opecode = 0x21, .k = 0x704e }
+};
 
 struct bh1750_softc {
     device_t			 dev;
@@ -82,14 +100,15 @@ struct bh1750_softc {
     uint8_t			 addr;
     uint8_t			 quality_lack;
     uint8_t			 polltime;
+    uint8_t			 hres_mode;
     bool			 detaching;
     uint16_t			 mtreg;
     uint16_t			 counts;
     unsigned long		 illuminance;
     unsigned long		 sensitivity;
     unsigned long		 ready_time;
-    unsigned long		 k;
     const struct bh1750_mtreg_t	*mtreg_params;
+    const struct bh1750_mode_t	*mode_params;
     struct timeout_task		 task;
 };
 
@@ -191,6 +210,7 @@ bh1750_attach(device_t dev)
 	sc->addr = iicbus_get_addr(dev);
 	sc->node = ofw_bus_get_node(dev);
 	sc->mtreg_params = &bh1750_mtreg_params;
+	sc->mode_params = bh1750_mode_params;
 
 	/*
 	 * We have to wait until interrupts are enabled.  Sometimes I2C read
@@ -258,7 +278,7 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 
 	/* set and recalculate */
 	sc->mtreg = mtreg_val;
-	sc->sensitivity = sc->k / mtreg_val;
+	sc->sensitivity = sc->mode_params[0].k / mtreg_val;
 	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
 	    * (100 + sc->quality_lack) / 100;
 
@@ -340,7 +360,7 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
-	if (bh1750_write(sc, BH1750_ONE_TIME_H_RES_MODE) != 0)
+	if (bh1750_write(sc, sc->mode_params[0].opecode) != 0)
 		return (-1);
 
 	DELAY(sc->ready_time);
@@ -349,7 +369,7 @@ bh1750_read_data(struct bh1750_softc *sc)
 		return (-1);
 
 	/* milli lux */
-	sc->illuminance = sc->k * sc->counts / sc->mtreg;
+	sc->illuminance = sc->mode_params[0].k * sc->counts / sc->mtreg;
 
 	return (0);
 }
@@ -542,9 +562,8 @@ bh1750_start(void *arg)
 	/* For H-resolution:
 	   milli_lux = counts * 1000 * (10 / 12) * (69 / MTReg)
 	 */
-	sc->k = 1000 * 10 * sc->mtreg_params->val_default / 12;
 
-	sc->polltime = BH1750_POLLTIME;
+	sc->hres_mode = 0;
 
 	/* Init the polling task */
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
