@@ -16,6 +16,7 @@
 	/* Up to 50% if You need to increase ready-time */
 	//quality-lack = <0>;
 	//polling-time = <5>;
+	hres-mode = <2>;
 	status = "okay";
     };
 };

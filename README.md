@@ -34,6 +34,12 @@ kldload bh1750
 sysctl dev.bh1750.0
 ```
 
+## Bug
+
+First measurement right after change a H-resolution mode by sysctl(8) returns
+a wrong (for previous mode) counts value, but all next measurements are
+correct. Do not understand why...
+
 ## Status
 
 The driver has been tested on "Raspberry Pi 2", "Orange Pi PC" and

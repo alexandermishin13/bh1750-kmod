@@ -64,11 +64,11 @@ struct bh1750_mtreg_t {
     uint16_t val_min;
     uint16_t val_max;
     uint16_t val_default;
-    unsigned long step_usec;
+    uint16_t step_usec;
 };
 struct bh1750_mode_t {
     uint8_t opecode;
-    unsigned long k;
+    uint16_t k;
 };
 
 /* step_usec = ceil(chip_data_ready_usec / mtreg_value) */
@@ -86,10 +86,10 @@ bh1750_mtreg_params =
    thus,
    k = MTReg_default/1.2 * 1000
  */
-
 static const struct bh1750_mode_t
 bh1750_mode_params[] =
 {
+    { .opecode = 0,    .k = 0 },
     { .opecode = 0x20, .k = 0xe09c },
     { .opecode = 0x21, .k = 0x704e }
 };
@@ -101,11 +101,12 @@ struct bh1750_softc {
     uint8_t			 quality_lack;
     uint8_t			 polltime;
     uint8_t			 hres_mode;
-    bool			 detaching;
     uint16_t			 mtreg;
     uint16_t			 counts;
+    uint16_t			 k;
+    uint16_t			 sensitivity;
+    bool			 detaching;
     unsigned long		 illuminance;
-    unsigned long		 sensitivity;
     unsigned long		 ready_time;
     const struct bh1750_mtreg_t	*mtreg_params;
     const struct bh1750_mode_t	*mode_params;
@@ -121,15 +122,20 @@ static void bh1750_poll(void*, int);
 static void bh1750_start(void *sc);
 
 static int bh1750_fdt_get_params(struct bh1750_softc*);
-static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t);
+static int bh1750_set_mtreg(struct bh1750_softc*, uint16_t, bool);
+static int bh1750_set_hres_mode(struct bh1750_softc*, uint8_t, bool);
 static int bh1750_set_quality(struct bh1750_softc*, uint8_t);
 static int bh1750_set_polltime(struct bh1750_softc*, uint8_t);
+
 static int bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS);
+static int bh1750_hres_mode_sysctl(SYSCTL_HANDLER_ARGS);
+static int bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS);
 
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
+static int bh1750_write_mtreg(struct bh1750_softc*);
+
 static int bh1750_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
-static int bh1750_write_mtreg(struct bh1750_softc*);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
     {"bh1750", (uintptr_t)"BH1750 Ambient Light Sensor module"},
@@ -255,15 +261,40 @@ bh1750_set_quality(struct bh1750_softc *sc, uint8_t quality_lack)
 
 	/* Lack of quality leads to increasing of ready-time */
 	sc->quality_lack = quality_lack;
-	sc->ready_time = sc->ready_time \
-	    * (100 + quality_lack) / 100;
+	sc->ready_time = sc->mtreg * sc->mtreg_params->step_usec \
+	    * (100 + sc->quality_lack) / 100;
+
+	return (0);
+}
+
+/* Sets the time penalty in percents for low-quality chips */
+static int
+bh1750_set_hres_mode(struct bh1750_softc *sc, uint8_t hres_mode, bool task_interrupt)
+{
+	/* H-resolution mode or mode2 only */
+	if ((hres_mode > 2) || (hres_mode == 0))
+		return (-1);
+
+	if (task_interrupt)
+		/* to be sure the task with old MTreg is canceled or finished */
+		while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
+			taskqueue_drain_timeout(taskqueue_thread, &sc->task);
+
+	/* Different modes have different sensivities */
+	sc->hres_mode = hres_mode;
+	sc->k = sc->mode_params[hres_mode].k;
+	sc->sensitivity = sc->k / sc->mtreg;
+
+	if (task_interrupt)
+		/* Get the measurement value and start the polling again */
+		bh1750_poll(sc, 0);
 
 	return (0);
 }
 
 /* Set MTreg value and recalculate dependent parameters */
 static int
-bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
+bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val, bool task_interrupt)
 {
 	int error;
 
@@ -272,13 +303,14 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 	    mtreg_val > sc->mtreg_params->val_max)
 		return (EINVAL);
 
-	/* to be sure the task with old MTreg is canceled or finished */
-	while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
-		taskqueue_drain_timeout(taskqueue_thread, &sc->task);
+	if (task_interrupt)
+		/* to be sure the task with old MTreg is canceled or finished */
+		while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
+			taskqueue_drain_timeout(taskqueue_thread, &sc->task);
 
 	/* set and recalculate */
 	sc->mtreg = mtreg_val;
-	sc->sensitivity = sc->mode_params[0].k / mtreg_val;
+	sc->sensitivity = sc->k / mtreg_val;
 	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
 	    * (100 + sc->quality_lack) / 100;
 
@@ -288,8 +320,9 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val)
 	    device_printf(sc->dev,
 		"could not write MTreg value\n");
 
-	/* Get the measurement value and start the polling again */
-	bh1750_poll(sc, 0);
+	if (task_interrupt)
+		/* Get the measurement value and start the polling again */
+		bh1750_poll(sc, 0);
 
 	return (0);
 }
@@ -360,7 +393,7 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
-	if (bh1750_write(sc, sc->mode_params[0].opecode) != 0)
+	if (bh1750_write(sc, sc->mode_params[sc->hres_mode].opecode) != 0)
 		return (-1);
 
 	DELAY(sc->ready_time);
@@ -369,7 +402,7 @@ bh1750_read_data(struct bh1750_softc *sc)
 		return (-1);
 
 	/* milli lux */
-	sc->illuminance = sc->mode_params[0].k * sc->counts / sc->mtreg;
+	sc->illuminance = sc->k * sc->counts / sc->mtreg;
 
 	return (0);
 }
@@ -389,7 +422,7 @@ bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 	if (error != 0)
 		return (error);
 
-	error = bh1750_set_mtreg(sc, _mtreg);
+	error = bh1750_set_mtreg(sc, _mtreg, true);
 
 	return (error);
 }
@@ -397,66 +430,90 @@ bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 static int
 bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS)
 {
-    struct bh1750_softc *sc = arg1;
-    uint8_t _lack = (uint8_t)sc->quality_lack;
-    int error = 0;
+	struct bh1750_softc *sc = arg1;
+	uint8_t _lack = (uint8_t)sc->quality_lack;
+	int error = 0;
 
-    error = SYSCTL_OUT(req, &_lack, sizeof(_lack));
-    if (error != 0 || req->newptr == NULL)
+	error = SYSCTL_OUT(req, &_lack, sizeof(_lack));
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	error = SYSCTL_IN(req, &_lack, sizeof(_lack));
+	if (error != 0)
+		return (error);
+
+	/* Lack of quality from 0 to 50 percent by the datasheet */
+	if (bh1750_set_quality(sc, _lack) != 0)
+		error = EINVAL;
+
 	return (error);
+}
 
-    error = SYSCTL_IN(req, &_lack, sizeof(_lack));
-    if (error != 0)
+static int
+bh1750_hres_mode_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct bh1750_softc *sc = arg1;
+	uint8_t _hres_mode = (uint8_t)sc->hres_mode;
+	int error = 0;
+
+	error = SYSCTL_OUT(req, &_hres_mode, sizeof(_hres_mode));
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	error = SYSCTL_IN(req, &_hres_mode, sizeof(_hres_mode));
+	if (error != 0)
+		return (error);
+
+	/* Lack of quality from 0 to 50 percent by the datasheet */
+	if (bh1750_set_hres_mode(sc, _hres_mode, true) != 0)
+		error = EINVAL;
+
 	return (error);
-
-    /* Lack of quality from 0 to 50 percent by the datasheet */
-    if (_lack > 50)
-	error = EINVAL;
-    else
-	error = bh1750_set_quality(sc, _lack);
-
-    return (error);
 }
 
 /* Create sysctl variables and set their handlers */
 static void
 bh1750_sysctl_register(struct bh1750_softc *sc)
 {
-    struct sysctl_ctx_list	*ctx;
-    struct sysctl_oid		*tree_node;
-    struct sysctl_oid_list	*tree;
+	struct sysctl_ctx_list	*ctx;
+	struct sysctl_oid		*tree_node;
+	struct sysctl_oid_list	*tree;
 
-    ctx = device_get_sysctl_ctx(sc->dev);
-    tree_node = device_get_sysctl_tree(sc->dev);
-    tree = SYSCTL_CHILDREN(tree_node);
+	ctx = device_get_sysctl_ctx(sc->dev);
+	tree_node = device_get_sysctl_tree(sc->dev);
+	tree = SYSCTL_CHILDREN(tree_node);
 
-    SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "counts",
-	CTLFLAG_RD,
-	&sc->counts, 0, "raw measurement data");
+	SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "counts",
+	    CTLFLAG_RD,
+	    &sc->counts, 0, "raw measurement data");
 
-    SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling-time",
-	CTLFLAG_RD,
-	&sc->polltime, 0, "polling period from 1 to 255, s");
+	SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling-time",
+	    CTLFLAG_RD,
+	    &sc->polltime, 0, "polling period from 1 to 255, s");
 
-    SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "sensitivity",
-	CTLFLAG_RD,
-	&sc->sensitivity, "measure sensitivity, mlx/counts");
+	SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "sensitivity",
+	    CTLFLAG_RD,
+	    &sc->sensitivity, 0, "measure sensitivity, mlx/counts");
 
-    SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
-	CTLFLAG_RD,
-	&sc->illuminance, "light intensity, mlx");
+	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
+	    CTLFLAG_RD,
+	    &sc->illuminance, "light intensity, mlx");
 
-    SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "mtreg",
-	CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
-	&bh1750_mtreg_sysctl, "CU", "MTreg value");
+	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "mtreg",
+	    CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	    &bh1750_mtreg_sysctl, "CU", "MTreg value");
 
-    SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "quality-lack",
-	CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
-	&bh1750_quality_sysctl, "CU", "lack of quality from 0 to 50, %");
+	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "quality-lack",
+	    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	    &bh1750_quality_sysctl, "CU", "lack of quality from 0 to 50, %");
 
-    SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "ready-time",
-	CTLFLAG_RD,
-	&sc->ready_time, "measurement time, usec");
+	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "hres-mode",
+	    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+	    &bh1750_hres_mode_sysctl, "CU", "H-resolution mode, 1 or 2");
+
+	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "ready-time",
+	    CTLFLAG_RD,
+	    &sc->ready_time, "measurement time, usec");
 
 }
 
@@ -464,87 +521,108 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 static int
 bh1750_fdt_get_params(struct bh1750_softc *sc)
 {
-    pcell_t pmtreg, pquality, ppolltime;
-    uint16_t mtreg;
-    uint8_t quality, polltime;
-    int mtreg_found, quality_found, polltime_found;
+	pcell_t param_cell;
+	ssize_t param_found;
+	uint16_t mtreg;
+	uint8_t param8;
 
-    /* If no "mtreg" parameter is set the default value will be applied*/
-    mtreg_found = OF_getencprop(sc->node, "mtreg", &pmtreg, sizeof(pmtreg));
-    if (mtreg_found > 0)
-    {
-	mtreg = (uint16_t)pmtreg;
-	if ((mtreg != pmtreg) || (bh1750_set_mtreg(sc, mtreg) != 0))
+	/* If no "mtreg" parameter is set the default value will be applied */
+	param_found = OF_getencprop(sc->node, "mtreg", &param_cell, sizeof(param_cell));
+	if (param_found > 0)
 	{
-	    device_printf(sc->dev,
-		"could not acquire correct MTreg value from DTS\n");
+		mtreg = (uint16_t)param_cell;
+		if ((mtreg != param_cell) || (bh1750_set_mtreg(sc, mtreg, false) != 0))
+		{
+			device_printf(sc->dev,
+			    "could not acquire correct MTreg value from DTS\n");
 
-	    return (EINVAL);
+			return (EINVAL);
+		}
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired MTreg: 0x%0x from DTS\n", sc->mtreg);
 	}
-    }
-    else
-	bh1750_set_mtreg(sc, sc->mtreg_params->val_default);
-
-    /* Set quality lack percent if found */
-    quality_found = OF_getencprop(sc->node, "quality-lack", &pquality, sizeof(pquality));
-    if (quality_found > 0)
-    {
-	quality = (uint8_t)pquality;
-//	if ((quality != pquality) || (bh1750_set_quality(sc, quality) != 0))
-	if (bh1750_set_quality(sc, quality) != 0)
+	else
 	{
-	    device_printf(sc->dev,
-		"could not acquire correct quality-lack value from DTS\n");
-
-	    return (EINVAL);
+		bh1750_set_mtreg(sc, sc->mtreg_params->val_default, false);
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired MTreg: 0x%0x by default\n", sc->mtreg);
 	}
-    }
-    else
-	bh1750_set_quality(sc, 0);
 
-    /* Set polling period if found */
-    polltime_found = OF_getencprop(sc->node, "polling-time", &ppolltime, sizeof(ppolltime));
-    if (polltime_found > 0)
-    {
-	polltime = (uint8_t)ppolltime;
-//	if ((polltime != ppolltime) || (bh1750_set_polltime(sc, polltime) != 0))
-	if (bh1750_set_polltime(sc, polltime) != 0)
+	/* Set H-resolution mode if found */
+	param_found = OF_getencprop(sc->node, "hres-mode", &param_cell, sizeof(param_cell));
+	if (param_found > 0)
 	{
-	    device_printf(sc->dev,
-		"could not acquire correct polling-time value from DTS\n");
+		param8 = (uint8_t)param_cell;
+		if ((param8 != param_cell) || (bh1750_set_hres_mode(sc, param8, false) != 0))
+		{
+			device_printf(sc->dev,
+			    "could not acquire correct H-resulution mode value from DTS\n");
 
-	    return (EINVAL);
+			return (EINVAL);
+		}
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired H-resolution mode: %u from DTS\n", sc->hres_mode);
 	}
-    }
-    else
-	bh1750_set_polltime(sc, BH1750_POLLTIME);
-
-    /* Print more details */
-    if (bootverbose)
-    {
-	if (mtreg_found > 0)
-	    device_printf(sc->dev,
-		"Acquired MTreg: 0x%0x from DTS\n", sc->mtreg);
 	else
-	    device_printf(sc->dev,
-		"Acquired MTreg: 0x%0x by default\n", sc->mtreg);
+	{
+		bh1750_set_hres_mode(sc, 1, false);
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired H-resolution mode: %u by default\n", sc->hres_mode);
+	}
 
-	if (quality_found > 0)
-	    device_printf(sc->dev,
-		"Acquired quality-lack: 0x%0x from DTS\n", sc->quality_lack);
+	/* Set quality lack percent if found */
+	param_found = OF_getencprop(sc->node, "quality-lack", &param_cell, sizeof(param_cell));
+	if (param_found > 0)
+	{
+		param8 = (uint8_t)param_cell;
+		if ((param8 != param_cell) || (bh1750_set_quality(sc, param8) != 0))
+		{
+			device_printf(sc->dev,
+			    "could not acquire correct quality-lack value from DTS\n");
+
+			return (EINVAL);
+		}
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired quality-lack: %u%% from DTS\n", sc->quality_lack);
+	}
 	else
-	    device_printf(sc->dev,
-		"Acquired quality-lack: 0x%0x by default\n", sc->quality_lack);
+	{
+		bh1750_set_quality(sc, 0);
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired quality-lack: %u%% by default\n", sc->quality_lack);
+	}
 
-	if (polltime_found > 0)
-	    device_printf(sc->dev,
-		"Acquired polling-time: 0x%0x from DTS\n", sc->polltime);
+	/* Set polling period if found */
+	param_found = OF_getencprop(sc->node, "polling-time", &param_cell, sizeof(param_cell));
+	if (param_found > 0)
+	{
+		param8 = (uint8_t)param_cell;
+		if ((param8 != param_cell) || (bh1750_set_polltime(sc, param8) != 0))
+		{
+			device_printf(sc->dev,
+			    "could not acquire correct polling-time value from DTS\n");
+
+			return (EINVAL);
+		}
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired polling-time: %us from DTS\n", sc->polltime);
+	}
 	else
-	    device_printf(sc->dev,
-		"Acquired polling-time: 0x%0x by default\n", sc->polltime);
-    }
+	{
+		bh1750_set_polltime(sc, BH1750_POLLTIME);
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "Acquired polling-time: %us by default\n", sc->polltime);
+	}
 
-    return (0);
+	return (0);
 }
 
 static void
@@ -559,16 +637,11 @@ bh1750_start(void *arg)
 		return;
 	}
 
-	/* For H-resolution:
-	   milli_lux = counts * 1000 * (10 / 12) * (69 / MTReg)
-	 */
-
-	sc->hres_mode = 0;
+	/* Get parameters from fdt */
+	bh1750_fdt_get_params(sc);
 
 	/* Init the polling task */
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
-
-	bh1750_fdt_get_params(sc);
 
 	/* 
 	 * Do an initial read so we have correct values for reporting before
