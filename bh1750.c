@@ -97,17 +97,18 @@ bh1750_mode_params[] =
 struct bh1750_softc {
     device_t			 dev;
     phandle_t			 node;
-    uint8_t			 addr;
-    uint8_t			 quality_lack;
-    uint8_t			 polltime;
-    uint8_t			 hres_mode;
     uint16_t			 mtreg;
     uint16_t			 counts;
     uint16_t			 k;
     uint16_t			 sensitivity;
-    bool			 detaching;
+    uint8_t			 addr;
+    uint8_t			 quality_lack;
+    uint8_t			 hres_mode;
+    uint8_t			 polltime;
+    sbintime_t			 polltime_sbt;
     unsigned long		 illuminance;
     unsigned long		 ready_time;
+    bool			 detaching;
     const struct bh1750_mtreg_t	*mtreg_params;
     const struct bh1750_mode_t	*mode_params;
     struct timeout_task		 task;
@@ -235,7 +236,7 @@ bh1750_poll(void *arg, int pending __unused)
 	bh1750_read_data(sc);
 	if (!sc->detaching)
 		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
-		    sc->polltime * SBT_1S, 0, C_PREL(3));
+		    sc->polltime_sbt, 0, C_PREL(1));
 }
 
 /* Sets the time period of polling */
@@ -247,6 +248,7 @@ bh1750_set_polltime(struct bh1750_softc *sc, uint8_t polltime)
 		return (-1);
 
 	sc->polltime = polltime;
+	sc->polltime_sbt = mstosbt(polltime * 1000);
 
 	return (0);
 }
@@ -272,13 +274,15 @@ static int
 bh1750_set_hres_mode(struct bh1750_softc *sc, uint8_t hres_mode, bool task_interrupt)
 {
 	/* H-resolution mode or mode2 only */
-	if ((hres_mode > 2) || (hres_mode == 0))
+	if ((hres_mode > 2) || (hres_mode < 1))
 		return (-1);
 
 	if (task_interrupt)
+	{
 		/* to be sure the task with old MTreg is canceled or finished */
 		while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
 			taskqueue_drain_timeout(taskqueue_thread, &sc->task);
+	}
 
 	/* Different modes have different sensivities */
 	sc->hres_mode = hres_mode;
@@ -286,8 +290,10 @@ bh1750_set_hres_mode(struct bh1750_softc *sc, uint8_t hres_mode, bool task_inter
 	sc->sensitivity = sc->k / sc->mtreg;
 
 	if (task_interrupt)
+	{
 		/* Get the measurement value and start the polling again */
 		bh1750_poll(sc, 0);
+	}
 
 	return (0);
 }
@@ -396,7 +402,8 @@ bh1750_read_data(struct bh1750_softc *sc)
 	if (bh1750_write(sc, sc->mode_params[sc->hres_mode].opecode) != 0)
 		return (-1);
 
-	DELAY(sc->ready_time);
+	//DELAY(sc->ready_time);
+	pause_sbt("waitrd", nstosbt(sc->ready_time), 0, C_PREL(1));
 
 	if (bh1750_read(sc, &sc->counts) != 0)
 		return (-1);
@@ -411,7 +418,7 @@ static int
 bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct bh1750_softc *sc = arg1;
-	uint16_t _mtreg = (uint16_t)sc->mtreg;
+	uint16_t _mtreg = sc->mtreg;
 	int error;
 
 	error = SYSCTL_OUT(req, &_mtreg, sizeof(_mtreg));
@@ -431,7 +438,7 @@ static int
 bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct bh1750_softc *sc = arg1;
-	uint8_t _lack = (uint8_t)sc->quality_lack;
+	uint8_t _lack = sc->quality_lack;
 	int error = 0;
 
 	error = SYSCTL_OUT(req, &_lack, sizeof(_lack));
@@ -453,7 +460,7 @@ static int
 bh1750_hres_mode_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct bh1750_softc *sc = arg1;
-	uint8_t _hres_mode = (uint8_t)sc->hres_mode;
+	uint8_t _hres_mode = sc->hres_mode;
 	int error = 0;
 
 	error = SYSCTL_OUT(req, &_hres_mode, sizeof(_hres_mode));
