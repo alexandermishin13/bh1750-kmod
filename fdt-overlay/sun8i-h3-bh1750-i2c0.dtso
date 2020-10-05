@@ -15,7 +15,7 @@
 	reg = <0x23>;
 	/* Up to 50% if You need to increase ready-time */
 	//quality-lack = <0>;
-	//polling-time = <5>;
+	polling-time = <2>;
 	hres-mode = <2>;
 	status = "okay";
     };

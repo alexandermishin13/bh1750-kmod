@@ -106,6 +106,7 @@ struct bh1750_softc {
     uint8_t			 hres_mode;
     uint8_t			 polltime;
     sbintime_t			 polltime_sbt;
+    sbintime_t			 readytime_sbt;
     unsigned long		 illuminance;
     unsigned long		 ready_time;
     bool			 detaching;
@@ -265,6 +266,7 @@ bh1750_set_quality(struct bh1750_softc *sc, uint8_t quality_lack)
 	sc->quality_lack = quality_lack;
 	sc->ready_time = sc->mtreg * sc->mtreg_params->step_usec \
 	    * (100 + sc->quality_lack) / 100;
+	sc->readytime_sbt = ustosbt(sc->ready_time);
 
 	return (0);
 }
@@ -319,6 +321,7 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val, bool task_interrup
 	sc->sensitivity = sc->k / mtreg_val;
 	sc->ready_time = mtreg_val * sc->mtreg_params->step_usec \
 	    * (100 + sc->quality_lack) / 100;
+	sc->readytime_sbt = ustosbt(sc->ready_time);
 
 	/* Write the MTreg to the sensor. If error start the polling anyway */
 	error = bh1750_write_mtreg(sc);
@@ -403,7 +406,7 @@ bh1750_read_data(struct bh1750_softc *sc)
 		return (-1);
 
 	//DELAY(sc->ready_time);
-	pause_sbt("waitrd", nstosbt(sc->ready_time), 0, C_PREL(1));
+	pause_sbt("waitrd", sc->readytime_sbt, 0, C_PREL(1));
 
 	if (bh1750_read(sc, &sc->counts) != 0)
 		return (-1);
