@@ -1,6 +1,7 @@
-DTSO=	\
-	sun8i-h2-plus-bh1750-i2c0.dtso \
-	sun8i-h3-bh1750-i2c0.dtso \
-	bh1750-rpi2-i2c0.dtso \
+DTSO!=	ls *.dtso
+
+.dtbo:
+	@echo No .dtso files found!
+	@echo Rename any .dtso.sample file to .dtso and edit it for Your needs
 
 .include <bsd.dtb.mk>
