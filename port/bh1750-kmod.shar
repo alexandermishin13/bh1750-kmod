@@ -38,9 +38,9 @@ X.include <bsd.port.mk>
 SHAR_END
 echo x misc/bh1750-kmod/distinfo
 sed 's/^X//' > misc/bh1750-kmod/distinfo << 'SHAR_END'
-XTIMESTAMP = 1602157527
-XSHA256 (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-af0517f05c298f9e033776d8bac286e0b9e7683f_GL0.tar.gz) = 6493675061776100f00c6c365c93325dcea691083f520460e90ca0d9e58c7970
-XSIZE (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-af0517f05c298f9e033776d8bac286e0b9e7683f_GL0.tar.gz) = 21348
+XTIMESTAMP = 1602443250
+XSHA256 (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-3d240a5c56cfda2f2847caae7b2b6fdfb31d4972_GL0.tar.gz) = 5c90f11ff0ae8a2a88113e573852b18eaf3c66f441d8704959ddd528d6b07834
+XSIZE (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-3d240a5c56cfda2f2847caae7b2b6fdfb31d4972_GL0.tar.gz) = 21991
 SHAR_END
 echo x misc/bh1750-kmod/pkg-descr
 sed 's/^X//' > misc/bh1750-kmod/pkg-descr << 'SHAR_END'
