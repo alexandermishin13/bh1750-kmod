@@ -54,17 +54,19 @@ from an illuminance analog input via
 .Xr sysctl 8 :
 .Bd -literal
 dev.bh1750.<unit>.ready-time: 180090
+dev.bh1750.<unit>.hres-mode: 1
 dev.bh1750.<unit>.quality-lack: 50
 dev.bh1750.<unit>.mtreg: 69
 dev.bh1750.<unit>.illuminance: 84166
 dev.bh1750.<unit>.sensitivity: 833
 dev.bh1750.<unit>.polling-time: 2
 dev.bh1750.<unit>.counts: 101
+dev.bh1750.<unit>.connected: 1
 dev.bh1750.<unit>.%parent: iicbus0
 dev.bh1750.<unit>.%pnpinfo: name=bh1750@23 compat=bh1750
 dev.bh1750.<unit>.%location: addr=0x46
-dev.bh1750.<unit>.<unit>river: bh1750
-dev.bh1750.<unit>.<unit>esc: BH1750 Ambient Light Sensor module
+dev.bh1750.<unit>.%driver: bh1750
+dev.bh1750.<unit>.%desc: BH1750 Ambient Light Sensor module
 .Ed
 .Sh SYSCTL VARIABLES
 The following variables are available:
@@ -75,11 +77,15 @@ measurement sensivity by increasing a measurment time;
 .It Va dev.bh1750.<unit>.quality-lack
 Lack of quality from 0 to 50 (default: 0), %. The reduced quality of a specific
 IC requires an increase in measurement readiness time at the same sensivity;
+.It Va dev.bh1750.<unit>.hres-mode
+H-resolution mode. Allowed modes are 1 and 2;
 .It Va dev.bh1750.<unit>.ready-time
 Predicted measurement time, usec. Depends on MTReg value and increases by
 quality lack percents;
 .It Va dev.bh1750.<unit>.counts
 Raw measurement data. The last measurement value stored in IC register;
+.It Va dev.bh1750.<unit>.connected
+Connection status of the device;
 .It Va dev.bh1750.<unit>.sensitivity
 A range for illuminance value changed per one count, mlx/counts. Depends on
 MTReg value;

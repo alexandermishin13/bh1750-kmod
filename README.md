@@ -34,6 +34,27 @@ kldload bh1750
 sysctl dev.bh1750.0
 ```
 
+## Description
+
+The driver allows you to set device measurement parameters via sysctl
+variables (and fdt-overlay parameters) and obtain result and calculated
+parameters from the driver.
+You can set and get the following parameters of the device:
+
+* measurement mode to H-resolution or H-resolution2, which changes
+the measurment sensitivity by 2 times;
+* MTReg value, which leads to recalculation of the actual sensitivity
+and, accordingly, a result ready time;
+* percentage of reduced quality of the chip from the ideal one, which will
+lead to a proportional increase of a result ready time.
+The manufacturer allows a decrease in quality of chips up to 50%.
+You may need it if You suspect that Your specimen is unable to complete the
+measurement on time;
+* polling time up to 255 seconds (through fdt-overlay parameter only by now.
+I still think if it may needed to dynamically change it);
+* get raw data from the chip as so called "counts";
+* get calculated illuminance value in mlx.
+
 ## Status
 
 The driver has been tested on "Raspberry Pi 2", "Orange Pi PC" and

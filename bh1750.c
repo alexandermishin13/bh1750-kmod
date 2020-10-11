@@ -97,6 +97,10 @@ bh1750_mode_params[] =
 struct bh1750_softc {
     device_t			 dev;
     phandle_t			 node;
+    sbintime_t			 polltime_sbt;
+    sbintime_t			 readytime_sbt;
+    unsigned long		 illuminance;
+    unsigned long		 ready_time;
     uint16_t			 mtreg;
     uint16_t			 counts;
     uint16_t			 k;
@@ -105,10 +109,7 @@ struct bh1750_softc {
     uint8_t			 quality_lack;
     uint8_t			 hres_mode;
     uint8_t			 polltime;
-    sbintime_t			 polltime_sbt;
-    sbintime_t			 readytime_sbt;
-    unsigned long		 illuminance;
-    unsigned long		 ready_time;
+    bool			 connected;
     bool			 detaching;
     const struct bh1750_mtreg_t	*mtreg_params;
     const struct bh1750_mode_t	*mode_params;
@@ -219,6 +220,7 @@ bh1750_attach(device_t dev)
 	sc->node = ofw_bus_get_node(dev);
 	sc->mtreg_params = &bh1750_mtreg_params;
 	sc->mode_params = bh1750_mode_params;
+	sc->connected = true;
 
 	/*
 	 * We have to wait until interrupts are enabled.  Sometimes I2C read
@@ -234,7 +236,21 @@ bh1750_poll(void *arg, int pending __unused)
 {
 	struct bh1750_softc *sc = (struct bh1750_softc *)arg;
 
-	bh1750_read_data(sc);
+	if (bh1750_read_data(sc) != 0)
+	{
+		if (sc->connected) {
+			device_printf(sc->dev, "connection to the device is lost\n");
+			sc->connected = false;
+		}
+	}
+	else
+	{
+		if (!sc->connected) {
+			device_printf(sc->dev, "connection to the device reesteblished\n");
+			sc->connected = true;
+		}
+	}
+
 	if (!sc->detaching)
 		taskqueue_enqueue_timeout_sbt(taskqueue_thread, &sc->task,
 		    sc->polltime_sbt, 0, C_PREL(1));
@@ -493,38 +509,46 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 	tree_node = device_get_sysctl_tree(sc->dev);
 	tree = SYSCTL_CHILDREN(tree_node);
 
-	SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "counts",
+	SYSCTL_ADD_BOOL(ctx, tree, OID_AUTO, "connected",
 	    CTLFLAG_RD,
-	    &sc->counts, 0, "raw measurement data");
+	    &sc->connected, 0, "connection status of the device");
 
-	SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling-time",
-	    CTLFLAG_RD,
-	    &sc->polltime, 0, "polling period from 1 to 255, s");
+	if (sc->connected)
+	{
 
-	SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "sensitivity",
-	    CTLFLAG_RD,
-	    &sc->sensitivity, 0, "measure sensitivity, mlx/counts");
+		SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "counts",
+		    CTLFLAG_RD,
+		    &sc->counts, 0, "raw measurement data");
 
-	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
-	    CTLFLAG_RD,
-	    &sc->illuminance, "light intensity, mlx");
+		SYSCTL_ADD_U8(ctx, tree, OID_AUTO, "polling-time",
+		    CTLFLAG_RD,
+		    &sc->polltime, 0, "polling period from 1 to 255, s");
 
-	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "mtreg",
-	    CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
-	    &bh1750_mtreg_sysctl, "CU", "MTreg value");
+		SYSCTL_ADD_U16(ctx, tree, OID_AUTO, "sensitivity",
+		    CTLFLAG_RD,
+		    &sc->sensitivity, 0, "measure sensitivity, mlx/counts");
 
-	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "quality-lack",
-	    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
-	    &bh1750_quality_sysctl, "CU", "lack of quality from 0 to 50, %");
+		SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
+		    CTLFLAG_RD,
+		    &sc->illuminance, "light intensity, mlx");
 
-	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "hres-mode",
-	    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
-	    &bh1750_hres_mode_sysctl, "CU", "H-resolution mode, 1 or 2");
+		SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "mtreg",
+		    CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+		    &bh1750_mtreg_sysctl, "CU", "MTreg value");
 
-	SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "ready-time",
-	    CTLFLAG_RD,
-	    &sc->ready_time, "measurement time, usec");
+		SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "quality-lack",
+		    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+		    &bh1750_quality_sysctl, "CU", "lack of quality from 0 to 50, %");
 
+		SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "hres-mode",
+		    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+		    &bh1750_hres_mode_sysctl, "CU", "H-resolution mode, 1 or 2");
+
+		SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "ready-time",
+		    CTLFLAG_RD,
+		    &sc->ready_time, "measurement time, usec");
+
+	}
 }
 
 /* Get MTreg properties if set from a device node */
@@ -644,6 +668,7 @@ bh1750_start(void *arg)
 	/* Check if device is connected */
 	if (bh1750_write(sc, BH1750_POWER_ON) != 0) {
 		device_printf(sc->dev, "failed to connect to the device\n");
+		sc->connected = false;
 		return;
 	}
 
