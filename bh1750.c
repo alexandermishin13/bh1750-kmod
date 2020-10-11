@@ -246,7 +246,7 @@ bh1750_poll(void *arg, int pending __unused)
 	else
 	{
 		if (!sc->connected) {
-			device_printf(sc->dev, "connection to the device reesteblished\n");
+			device_printf(sc->dev, "connection to the device reestablished\n");
 			sc->connected = true;
 		}
 	}
