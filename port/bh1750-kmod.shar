@@ -1,0 +1,94 @@
+#!/bin/sh
+# This is a shell archive
+echo x misc/bh1750-kmod
+mkdir -p misc/bh1750-kmod > /dev/null 2>&1
+echo x misc/bh1750-kmod/Makefile
+sed 's/^X//' > misc/bh1750-kmod/Makefile << 'SHAR_END'
+X# $FreeBSD$
+X
+XPORTNAME=	bh1750-kmod
+XDISTVERSION=	g20201011
+XCATEGORIES=	misc
+XDIST_SUBDIR=	gpio/${GL_ACCOUNT}
+X
+XMAINTAINER=	mishin@mh.net.ru
+XCOMMENT=	FreeBSD kernel driver for a BH1750FVI based light sensor
+X
+XLICENSE=	BSD2CLAUSE
+XLICENSE_FILE=	${WRKSRC}/LICENSE
+X
+XONLY_FOR_ARCHS=	armv7
+XONLY_FOR_ARCHS_REASON=	not tested on anything else
+X
+XUSES=		kmod
+X
+X# gitlab variables
+XUSE_GITLAB=	yes
+XGL_ACCOUNT=	alexandermishin13
+XGL_PROJECT=	bh1750-kmod
+XGL_COMMIT=	3d240a5c56cfda2f2847caae7b2b6fdfb31d4972
+X
+XSUB_FILES=	pkg-message
+X
+Xpost-install:
+X	${MKDIR} ${STAGEDIR}${EXAMPLESDIR}
+X	(cd ${WRKSRC}/fdt-overlay && ${COPYTREE_SHARE} . ${STAGEDIR}${EXAMPLESDIR})
+X
+X.include <bsd.port.mk>
+SHAR_END
+echo x misc/bh1750-kmod/distinfo
+sed 's/^X//' > misc/bh1750-kmod/distinfo << 'SHAR_END'
+XTIMESTAMP = 1602157527
+XSHA256 (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-af0517f05c298f9e033776d8bac286e0b9e7683f_GL0.tar.gz) = 6493675061776100f00c6c365c93325dcea691083f520460e90ca0d9e58c7970
+XSIZE (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-af0517f05c298f9e033776d8bac286e0b9e7683f_GL0.tar.gz) = 21348
+SHAR_END
+echo x misc/bh1750-kmod/pkg-descr
+sed 's/^X//' > misc/bh1750-kmod/pkg-descr << 'SHAR_END'
+XFreeBSD kernel driver for a bh1750 sensor (up to two ones on an i2c bus).
+X
+XIt makes the sensor to measure ambient light every 5 seconds and updates a
+Xcorresponding sysctl(8) variables. You may manage the measurement by changing
+Xsome variables.
+X
+XFor building the port You need the kernel sources installed into /usr/src.
+X
+XWWW: https://gitlab.com/alexandermishin13/bh1750-kmod
+SHAR_END
+echo x misc/bh1750-kmod/files
+mkdir -p misc/bh1750-kmod/files > /dev/null 2>&1
+echo x misc/bh1750-kmod/pkg-plist
+sed 's/^X//' > misc/bh1750-kmod/pkg-plist << 'SHAR_END'
+X/%%KMODDIR%%/bh1750.ko
+Xshare/examples/bh1750-kmod/Makefile
+X@sample %%EXAMPLESDIR%%/sun8i-h2-plus-bh1750-i2c0.dtso.sample
+X@sample %%EXAMPLESDIR%%/sun8i-h3-bh1750-i2c0.dtso.sample
+X@sample %%EXAMPLESDIR%%/bh1750-rpi2-i2c0.dtso.sample
+Xman/man4/bh1750.4.gz
+SHAR_END
+echo x misc/bh1750-kmod/files/pkg-message.in
+sed 's/^X//' > misc/bh1750-kmod/files/pkg-message.in << 'SHAR_END'
+X[
+X{
+Xtype: install
+Xmessage: <<EOM
+X
+XJust edit for Your needs one of the fdt-overlays You may find here:
+X
+X  %%EXAMPLESDIR%%/*.dtso
+X
+XType to compile and install:
+X
+X  make
+X  make install
+X
+XThen add its name w/o extention to /boot/loader.conf for apply the overlay
+Xon boot:
+X
+X  fdt_overlays="your-bh1750-overlay"
+X
+XReboot.
+XEOM
+X}
+X]
+SHAR_END
+exit
