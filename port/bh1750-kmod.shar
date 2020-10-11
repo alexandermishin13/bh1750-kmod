@@ -7,7 +7,7 @@ sed 's/^X//' > misc/bh1750-kmod/Makefile << 'SHAR_END'
 X# $FreeBSD$
 X
 XPORTNAME=	bh1750-kmod
-XDISTVERSION=	g20201011
+XDISTVERSION=	g20201012
 XCATEGORIES=	misc
 XDIST_SUBDIR=	gpio/${GL_ACCOUNT}
 X
@@ -26,7 +26,7 @@ X# gitlab variables
 XUSE_GITLAB=	yes
 XGL_ACCOUNT=	alexandermishin13
 XGL_PROJECT=	bh1750-kmod
-XGL_COMMIT=	3d240a5c56cfda2f2847caae7b2b6fdfb31d4972
+XGL_COMMIT=	c5eec812084f4c64e4a5ffec6c8c086cb9dfbd57
 X
 XSUB_FILES=	pkg-message
 X
@@ -38,9 +38,9 @@ X.include <bsd.port.mk>
 SHAR_END
 echo x misc/bh1750-kmod/distinfo
 sed 's/^X//' > misc/bh1750-kmod/distinfo << 'SHAR_END'
-XTIMESTAMP = 1602443250
-XSHA256 (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-3d240a5c56cfda2f2847caae7b2b6fdfb31d4972_GL0.tar.gz) = 5c90f11ff0ae8a2a88113e573852b18eaf3c66f441d8704959ddd528d6b07834
-XSIZE (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-3d240a5c56cfda2f2847caae7b2b6fdfb31d4972_GL0.tar.gz) = 21991
+XTIMESTAMP = 1602449267
+XSHA256 (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-c5eec812084f4c64e4a5ffec6c8c086cb9dfbd57_GL0.tar.gz) = 86ec885f6c1b8839420dabd41a825c75320565e72714331b94b4f2012d8a71ec
+XSIZE (gpio/alexandermishin13/alexandermishin13-bh1750-kmod-c5eec812084f4c64e4a5ffec6c8c086cb9dfbd57_GL0.tar.gz) = 23134
 SHAR_END
 echo x misc/bh1750-kmod/pkg-descr
 sed 's/^X//' > misc/bh1750-kmod/pkg-descr << 'SHAR_END'
