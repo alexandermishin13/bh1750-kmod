@@ -265,7 +265,7 @@ bh1750_set_polltime(struct bh1750_softc *sc, uint8_t polltime)
 		return (-1);
 
 	sc->polltime = polltime;
-	sc->polltime_sbt = mstosbt(polltime * 1000);
+	sc->polltime_sbt = polltime * SBT_1S;
 
 	return (0);
 }
