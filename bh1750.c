@@ -40,6 +40,12 @@
 #include <sys/bus.h>
 #include <sys/uio.h>    /* uio struct */
 
+#include <sys/mutex.h>
+#include <sys/selinfo.h>
+#include <sys/poll.h>
+
+#include <sys/limits.h>
+
 #include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
@@ -53,11 +59,50 @@
 #define BH1750_RESET			0x07
 #define BH1750_MTREG_H_BYTE		0x40
 #define BH1750_MTREG_L_BYTE		0x60
+#define BH1750_DEV_NAME			"bh1750"
+
+#define ULONG_DECIMAL_LENGTH 		((size_t) (sizeof(unsigned long) * CHAR_BIT * 0.302) + 3)
 
 #ifdef FDT
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+
+MALLOC_DECLARE(M_BH1750BUF);
+MALLOC_DEFINE(M_BH1750BUF, "bh1750buffer", "Buffer for bh1750 module");
+
+/* Function prototypes */
+static d_open_t		bh1750_open;
+static d_close_t	bh1750_close;
+static d_read_t		bh1750_read;
+//static d_write_t	bh1750_write;
+static d_poll_t		bh1750_poll;
+//static d_ioctl_t	bh1750_ioctl;
+/*
+static d_kqfilter_t	bh1750_kqfilter;
+static int		bh1750_kqevent(struct knote *, long);
+static void		bh1750_kqdetach(struct knote *);
+
+static struct filterops bh1750_filterops = {
+    .f_isfd =		1,
+    .f_attach =		NULL,
+    .f_detach =		bh1750_kqdetach,
+    .f_event =		bh1750_kqevent,
+};
+*/
+
+/* Character device entry points */
+static struct cdevsw bh1750_cdevsw = {
+    .d_version = D_VERSION,
+    .d_open = bh1750_open,
+    .d_close = bh1750_close,
+    .d_read = bh1750_read,
+//    .d_write = bh1750_write,
+    .d_poll = bh1750_poll,
+//    .d_kqfilter = bh1750_kqfilter,
+//    .d_ioctl = bh1750_ioctl,
+    .d_name = BH1750_DEV_NAME,
+};
 
 /* chip mtreg parameters */
 struct bh1750_mtreg_t {
@@ -66,9 +111,16 @@ struct bh1750_mtreg_t {
     uint16_t val_default;
     uint16_t step_usec;
 };
+
 struct bh1750_mode_t {
-    uint8_t opecode;
+    uint8_t  opecode;
     uint16_t k;
+};
+
+struct bh1750_buffer {
+    char     text[ULONG_DECIMAL_LENGTH];
+    size_t   length;
+    bool     ready;
 };
 
 /* step_usec = ceil(chip_data_ready_usec / mtreg_value) */
@@ -109,19 +161,25 @@ struct bh1750_softc {
     uint8_t			 quality_lack;
     uint8_t			 hres_mode;
     uint8_t			 polltime;
+    struct mtx			 mtx;
     bool			 connected;
     bool			 detaching;
+    bool			 poll_sel;
     const struct bh1750_mtreg_t	*mtreg_params;
     const struct bh1750_mode_t	*mode_params;
+    struct bh1750_buffer	*value_text;
+    struct cdev			*cdev;
+    struct selinfo		 rsel;
     struct timeout_task		 task;
 };
 
 static int bh1750_probe(device_t);
 static int bh1750_attach(device_t);
 static int bh1750_detach(device_t);
+static void bh1750_notify(struct bh1750_softc *);
 
 static void bh1750_sysctl_register(struct bh1750_softc*);
-static void bh1750_poll(void*, int);
+static void bh1750_polldata(void*, int);
 static void bh1750_start(void *sc);
 
 static int bh1750_fdt_get_params(struct bh1750_softc*);
@@ -137,7 +195,7 @@ static int bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS);
 static int bh1750_write(struct bh1750_softc*, uint8_t opecode);
 static int bh1750_write_mtreg(struct bh1750_softc*);
 
-static int bh1750_read(struct bh1750_softc*, uint16_t* data);
+static int bh1750_i2c_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
@@ -198,6 +256,19 @@ bh1750_detach(device_t dev)
 {
 	struct bh1750_softc *sc = device_get_softc(dev);
 
+	/* Destroy the rcrecv cdev. */
+	if (sc->cdev != NULL) {
+		mtx_lock(&sc->mtx);
+		sc->cdev->si_drv1 = NULL;
+		/* Wake everyone */
+		bh1750_notify(sc);
+		mtx_unlock(&sc->mtx);
+		destroy_dev(sc->cdev);
+	}
+
+	knlist_destroy(&sc->rsel.si_note);
+	seldrain(&sc->rsel);
+
 	sc->detaching = true;
 	while (taskqueue_cancel_timeout(taskqueue_thread, &sc->task, NULL) != 0)
 		taskqueue_drain_timeout(taskqueue_thread, &sc->task);
@@ -205,6 +276,8 @@ bh1750_detach(device_t dev)
 	/* Send POWER_DOWN opecode if the device was initialized */
 	if (sc->mtreg > 0)
 		bh1750_write(sc, BH1750_POWER_DOWN);
+
+	free(sc->value_text, M_BH1750BUF);
 
 	return (0);
 }
@@ -214,6 +287,8 @@ static int
 bh1750_attach(device_t dev)
 {
 	struct bh1750_softc *sc = device_get_softc(dev);
+	int unit = device_get_unit (dev);
+	int err;
 
 	sc->dev = dev;
 	sc->addr = iicbus_get_addr(dev);
@@ -221,6 +296,26 @@ bh1750_attach(device_t dev)
 	sc->mtreg_params = &bh1750_mtreg_params;
 	sc->mode_params = bh1750_mode_params;
 	sc->connected = true;
+
+	sc->value_text = malloc(sizeof(*sc->value_text), M_BH1750BUF, M_WAITOK | M_ZERO);
+
+	/* Create the tm1637 cdev. */
+	err = make_dev_p(MAKEDEV_CHECKNAME | MAKEDEV_WAITOK,
+		&sc->cdev,
+		&bh1750_cdevsw,
+		0,
+		UID_ROOT,
+		GID_WHEEL,
+		0600,
+		"%s/%u",BH1750_DEV_NAME, unit);
+
+	if (err != 0) {
+		device_printf(dev, "Unable to create bh1750 cdev\n");
+		bh1750_detach(dev);
+		return (err);
+	}
+
+	sc->cdev->si_drv1 = sc;
 
 	/*
 	 * We have to wait until interrupts are enabled.  Sometimes I2C read
@@ -231,8 +326,148 @@ bh1750_attach(device_t dev)
 	return (0);
 }
 
+static int
+bh1750_open(struct cdev *cdev, int oflags __unused, int devtype __unused,
+    struct thread *td __unused)
+{
+
+#ifdef DEBUG
+	uprintf("Device \"%s\" opened.\n", bh1750_cdevsw.d_name);
+#endif
+
+	return (0);
+}
+
+static int
+bh1750_close(struct cdev *cdev __unused, int fflag __unused, int devtype __unused,
+    struct thread *td __unused)
+{
+
+#ifdef DEBUG
+	uprintf("Device \"%s\" closed.\n", bh1750_cdevsw.d_name);
+#endif
+
+	return (0);
+}
+
+static int
+bh1750_read(struct cdev *cdev, struct uio *uio, int ioflag __unused)
+{
+	struct bh1750_softc *sc = cdev->si_drv1;
+	struct bh1750_buffer *t = sc->value_text;
+
+	size_t amnt;
+	int error = 0;
+	off_t uio_offset_saved;
+
+	/* Exit normally but no realy uiomove() if not ready */
+	if (!t->ready)
+		return (error);
+
+	mtx_lock(&sc->mtx);
+	uio_offset_saved = uio->uio_offset;
+
+	amnt = MIN(uio->uio_resid,
+		  (t->length - uio->uio_offset > 0) ?
+		   t->length - uio->uio_offset : 0);
+	error = uiomove(t->text, amnt, uio);
+
+	uio->uio_offset = uio_offset_saved;
+
+	if (error != 0)
+		uprintf("uiomove failed!\n");
+	else
+		t->ready = false;
+
+	mtx_unlock(&sc->mtx);
+
+	return (error);
+}
+
+static int
+bh1750_poll(struct cdev *dev, int events, struct thread *td)
+{
+	int revents = 0;
+	struct bh1750_softc *sc = dev->si_drv1;
+
+	mtx_lock(&sc->mtx);
+	if (events & (POLLIN | POLLRDNORM)) {
+		if (!sc->poll_sel) {
+			sc->poll_sel = true;
+			revents = events & (POLLIN | POLLRDNORM);
+		}
+		else
+		    selrecord(td, &sc->rsel);
+	}
+	mtx_unlock(&sc->mtx);
+
+	return (revents);
+}
+
 static void
-bh1750_poll(void *arg, int pending __unused)
+bh1750_notify(struct bh1750_softc *sc)
+{
+	mtx_assert(&sc->mtx, MA_OWNED);
+
+	if (sc->poll_sel) {
+		sc->poll_sel = false;
+		selwakeuppri(&sc->rsel, PZERO);
+	}
+
+	KNOTE_LOCKED(&sc->rsel.si_note, 0);
+}
+
+/*
+static int
+bh1750_kqfilter(struct cdev *dev, struct knote *kn)
+{
+	struct bh1750_softc *sc = dev->si_drv1;
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		kn->kn_fop = &bh1750_filterops;
+		kn->kn_hook = sc;
+		mtx_lock(&sc->mtx);
+		knlist_add(&sc->rsel.si_note, kn, 1);
+		mtx_unlock(&sc->mtx);
+		break;
+	default:
+		return (EINVAL);
+		//return (EOPNOTSUPP);
+	}
+
+	return (0);
+}
+
+static int
+bh1750_kqevent(struct knote *kn, long hint)
+{
+	struct bh1750_softc *sc = kn->kn_hook;
+	size_t len;
+
+	mtx_assert(&sc->mtx, MA_OWNED);
+
+	if (sc->ready) {
+		len = BUFFER_LENGTH;
+
+		kn->kn_data = len;
+		return (1);
+	}
+	else
+		return (0);
+}
+
+static void
+bh1750_kqdetach(struct knote *kn)
+{
+	struct bh1750_softc *sc = kn->kn_hook;
+
+	knlist_remove(&sc->rsel.si_note, kn, 0);
+}
+*/
+
+static void
+bh1750_polldata(void *arg, int pending __unused)
 {
 	struct bh1750_softc *sc = (struct bh1750_softc *)arg;
 
@@ -310,7 +545,7 @@ bh1750_set_hres_mode(struct bh1750_softc *sc, uint8_t hres_mode, bool task_inter
 	if (task_interrupt)
 	{
 		/* Get the measurement value and start the polling again */
-		bh1750_poll(sc, 0);
+		bh1750_polldata(sc, 0);
 	}
 
 	return (0);
@@ -347,7 +582,7 @@ bh1750_set_mtreg(struct bh1750_softc *sc, uint16_t mtreg_val, bool task_interrup
 
 	if (task_interrupt)
 		/* Get the measurement value and start the polling again */
-		bh1750_poll(sc, 0);
+		bh1750_polldata(sc, 0);
 
 	return (0);
 }
@@ -396,7 +631,7 @@ bh1750_write(struct bh1750_softc *sc, uint8_t opecode)
 
 /* Read data */
 static int
-bh1750_read(struct bh1750_softc *sc, uint16_t *result)
+bh1750_i2c_read(struct bh1750_softc *sc, uint16_t *result)
 {
 	int error = 0;
 	uint16_t be_result;
@@ -418,17 +653,23 @@ bh1750_read(struct bh1750_softc *sc, uint16_t *result)
 static int
 bh1750_read_data(struct bh1750_softc *sc)
 {
+	struct bh1750_buffer *t = sc->value_text;
+
 	if (bh1750_write(sc, sc->mode_params[sc->hres_mode].opecode) != 0)
 		return (-1);
 
 	//DELAY(sc->ready_time);
 	pause_sbt("waitrd", sc->readytime_sbt, 0, C_PREL(1));
 
-	if (bh1750_read(sc, &sc->counts) != 0)
+	if (bh1750_i2c_read(sc, &sc->counts) != 0)
 		return (-1);
 
 	/* milli lux */
 	sc->illuminance = sc->k * sc->counts / sc->mtreg;
+	t->length = snprintf(t->text, ULONG_DECIMAL_LENGTH, "%lu\n", sc->illuminance);
+	t->ready = true;
+
+	bh1750_notify(sc);
 
 	return (0);
 }
@@ -676,7 +917,7 @@ bh1750_start(void *arg)
 	bh1750_fdt_get_params(sc);
 
 	/* Init the polling task */
-	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_poll, sc);
+	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->task, 0, bh1750_polldata, sc);
 
 	/* 
 	 * Do an initial read so we have correct values for reporting before
@@ -684,7 +925,7 @@ bh1750_start(void *arg)
 	 * schedules the periodic polling the driver does every few seconds to
 	 * update the sysctl variables.
 	 */
-	bh1750_poll(sc, 0);
+	bh1750_polldata(sc, 0);
 
 	/* Add sysctl variables */
 	bh1750_sysctl_register(sc);
