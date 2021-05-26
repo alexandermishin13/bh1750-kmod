@@ -78,7 +78,7 @@ static d_read_t		bh1750_read;
 //static d_write_t	bh1750_write;
 static d_poll_t		bh1750_poll;
 //static d_ioctl_t	bh1750_ioctl;
-/*
+
 static d_kqfilter_t	bh1750_kqfilter;
 static int		bh1750_kqevent(struct knote *, long);
 static void		bh1750_kqdetach(struct knote *);
@@ -89,7 +89,6 @@ static struct filterops bh1750_filterops = {
     .f_detach =		bh1750_kqdetach,
     .f_event =		bh1750_kqevent,
 };
-*/
 
 /* Character device entry points */
 static struct cdevsw bh1750_cdevsw = {
@@ -99,7 +98,7 @@ static struct cdevsw bh1750_cdevsw = {
     .d_read = bh1750_read,
 //    .d_write = bh1750_write,
     .d_poll = bh1750_poll,
-//    .d_kqfilter = bh1750_kqfilter,
+    .d_kqfilter = bh1750_kqfilter,
 //    .d_ioctl = bh1750_ioctl,
     .d_name = BH1750_DEV_NAME,
 };
@@ -290,6 +289,9 @@ bh1750_attach(device_t dev)
 	int unit = device_get_unit (dev);
 	int err;
 
+	mtx_init(&sc->mtx, "bh1750_mtx", NULL, MTX_DEF);
+	knlist_init_mtx(&sc->rsel.si_note, &sc->mtx);
+
 	sc->dev = dev;
 	sc->addr = iicbus_get_addr(dev);
 	sc->node = ofw_bus_get_node(dev);
@@ -417,7 +419,6 @@ bh1750_notify(struct bh1750_softc *sc)
 	KNOTE_LOCKED(&sc->rsel.si_note, 0);
 }
 
-/*
 static int
 bh1750_kqfilter(struct cdev *dev, struct knote *kn)
 {
@@ -443,14 +444,12 @@ static int
 bh1750_kqevent(struct knote *kn, long hint)
 {
 	struct bh1750_softc *sc = kn->kn_hook;
-	size_t len;
+	struct bh1750_buffer *t = sc->value_text;
 
 	mtx_assert(&sc->mtx, MA_OWNED);
 
-	if (sc->ready) {
-		len = BUFFER_LENGTH;
-
-		kn->kn_data = len;
+	if (t->ready) {
+		kn->kn_data = t->length;
 		return (1);
 	}
 	else
@@ -464,7 +463,6 @@ bh1750_kqdetach(struct knote *kn)
 
 	knlist_remove(&sc->rsel.si_note, kn, 0);
 }
-*/
 
 static void
 bh1750_polldata(void *arg, int pending __unused)

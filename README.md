@@ -59,5 +59,11 @@ I still think if it may needed to dynamically change it);
 
 The driver has been tested on "Raspberry Pi 2", "Orange Pi PC" and
 "Orange Pi Zero" (sun8i-h2-plus-i2c0.dtbo is also needed).
-During testing, two sensors with addresses 0x23 and 0x5С were used
+
+Added cdev support for devices.
+
+Added support poll(2) and kevent(2) support.
+
+Re-confirmation required:
+* During testing, two sensors with addresses 0x23 and 0x5С were used
 simultaneously.
