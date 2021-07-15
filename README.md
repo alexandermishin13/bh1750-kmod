@@ -12,16 +12,16 @@ a corresponding sysctl branch.
 
 You need a FreeBSD kernel source codes.
 ```shell
-make depend
-make
-sudo make install
+% make depend
+% make
+% sudo make install
 ```
 You may need to edit fdt-overlay sources for Your needs, make and
 install them:
 ```shell
-cd fdt-overlay
-make
-sudo make install
+% cd fdt-overlay
+% make
+% sudo make install
 ```
 Append an overlay to "/boot/loader.conf" and reboot:
 <pre><code>
@@ -30,8 +30,8 @@ fdt_overlays="sun8i-h3-sid,sun8i-h3-ths<b>,sun8i-h3-bh1750-i2c0</b>"
 
 Now You can load the module and check its work:
 ```shell
-kldload bh1750
-sysctl dev.bh1750.0
+% kldload bh1750
+% sysctl dev.bh1750.0
 ```
 
 ## Description
