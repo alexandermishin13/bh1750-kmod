@@ -55,6 +55,26 @@ I still think if it may needed to dynamically change it);
 * get raw data from the chip as so called "counts";
 * get calculated illuminance value in mlx.
 
+```shell
+% sysctl dev.bh1750.0
+dev.bh1750.0.ready-time: 441960
+dev.bh1750.0.hres-mode: 2
+dev.bh1750.0.quality-lack: 0
+dev.bh1750.0.mtreg: 254
+dev.bh1750.0.illuminance: 5772
+dev.bh1750.0.sensitivity: 113
+dev.bh1750.0.polling-time: 2
+dev.bh1750.0.counts: 51
+dev.bh1750.0.connected: 1
+dev.bh1750.0.%parent: iicbus0
+dev.bh1750.0.%pnpinfo: name=bh1750@23 compat=bh1750
+dev.bh1750.0.%location: addr=0x46
+dev.bh1750.0.%driver: bh1750
+dev.bh1750.0.%desc: BH1750 Ambient Light Sensor module
+dev.bh1750.%parent: 
+
+```
+
 ## Status
 
 The driver has been tested on "Raspberry Pi 2", "Orange Pi PC" and
@@ -62,7 +82,7 @@ The driver has been tested on "Raspberry Pi 2", "Orange Pi PC" and
 
 Added cdev support for devices.
 
-Added support of poll(2) and kevent(2).
+Added support of poll(2) and kevent(2) to user processes.
 
 Re-confirmation required:
 * During testing, two sensors with addresses 0x23 and 0x5С were used
