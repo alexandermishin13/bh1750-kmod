@@ -61,7 +61,7 @@
 #define BH1750_MTREG_L_BYTE		0x60
 #define BH1750_DEV_NAME			"bh1750"
 
-#define ULONG_DECIMAL_LENGTH 		((size_t) (sizeof(unsigned long) * CHAR_BIT * 0.302) + 3)
+#define ULONG_DECIMAL_LENGTH		((size_t) (sizeof(unsigned long) * CHAR_BIT * 10 / 33) + 3)
 
 #ifdef FDT
 #include <dev/ofw/openfirm.h>
@@ -198,7 +198,7 @@ static int bh1750_i2c_read(struct bh1750_softc*, uint16_t* data);
 static int bh1750_read_data(struct bh1750_softc*);
 
 static const struct ofw_compat_data bh1750_compat_data[] = {
-    {"bh1750", (uintptr_t)"BH1750 Ambient Light Sensor module"},
+    {"rohm,bh1750", (uintptr_t)"BH1750 Ambient light sensor with an i2c interface"},
     {NULL, false}
 };
 
@@ -242,7 +242,7 @@ bh1750_probe(device_t dev)
 
 	return (BUS_PROBE_DEFAULT);
 #else
-	device_set_desc(dev, "BH1750 Ambient Light Sensor module");
+	device_set_desc(dev, "BH1750 Ambient light sensor with an i2c interface");
 
 	return (BUS_PROBE_NOWILDCARD);
 #endif
