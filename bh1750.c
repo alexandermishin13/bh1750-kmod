@@ -61,7 +61,8 @@
 #define BH1750_MTREG_L_BYTE		0x60
 #define BH1750_DEV_NAME			"bh1750"
 
-#define ULONG_DECIMAL_LENGTH		((size_t) (sizeof(unsigned long) * CHAR_BIT * 10 / 33) + 3)
+// Buffer size equals to maximum number of characters + 2 (for '\n' and '\0')
+#define U32_DECIMAL_LENGTH		((size_t) (sizeof(uint32_t) * CHAR_BIT * 302 / 1000 + 1) + 2)
 
 #ifdef FDT
 #include <dev/ofw/openfirm.h>
@@ -117,7 +118,7 @@ struct bh1750_mode_t {
 };
 
 struct bh1750_buffer {
-    char     text[ULONG_DECIMAL_LENGTH];
+    char     text[U32_DECIMAL_LENGTH];
     size_t   length;
     bool     ready;
 };
@@ -150,8 +151,8 @@ struct bh1750_softc {
     phandle_t			 node;
     sbintime_t			 polltime_sbt;
     sbintime_t			 readytime_sbt;
-    unsigned long		 illuminance;
-    unsigned long		 ready_time;
+    uint32_t			 illuminance;
+    uint32_t			 ready_time;
     uint16_t			 mtreg;
     uint16_t			 counts;
     uint16_t			 k;
@@ -286,7 +287,7 @@ static int
 bh1750_attach(device_t dev)
 {
 	struct bh1750_softc *sc = device_get_softc(dev);
-	int unit = device_get_unit (dev);
+	int unit = device_get_unit(dev);
 	int err;
 
 	mtx_init(&sc->mtx, "bh1750_mtx", NULL, MTX_DEF);
@@ -663,8 +664,8 @@ bh1750_read_data(struct bh1750_softc *sc)
 		return (-1);
 
 	/* milli lux */
-	sc->illuminance = sc->k * sc->counts / sc->mtreg;
-	t->length = snprintf(t->text, ULONG_DECIMAL_LENGTH, "%lu\n", sc->illuminance);
+	sc->illuminance = (uint32_t) sc->k * sc->counts / sc->mtreg;
+	t->length = snprintf(t->text, U32_DECIMAL_LENGTH, "%u\n", sc->illuminance);
 	t->ready = true;
 
 	bh1750_notify(sc);
@@ -741,7 +742,7 @@ static void
 bh1750_sysctl_register(struct bh1750_softc *sc)
 {
 	struct sysctl_ctx_list	*ctx;
-	struct sysctl_oid		*tree_node;
+	struct sysctl_oid	*tree_node;
 	struct sysctl_oid_list	*tree;
 
 	ctx = device_get_sysctl_ctx(sc->dev);
@@ -767,9 +768,9 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 		    CTLFLAG_RD,
 		    &sc->sensitivity, 0, "measure sensitivity, mlx/counts");
 
-		SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "illuminance",
+		SYSCTL_ADD_U32(ctx, tree, OID_AUTO, "illuminance",
 		    CTLFLAG_RD,
-		    &sc->illuminance, "light intensity, mlx");
+		    &sc->illuminance, 0, "light intensity, mlx");
 
 		SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "mtreg",
 		    CTLTYPE_U16 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
@@ -783,9 +784,9 @@ bh1750_sysctl_register(struct bh1750_softc *sc)
 		    CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
 		    &bh1750_hres_mode_sysctl, "CU", "H-resolution mode, 1 or 2");
 
-		SYSCTL_ADD_ULONG(ctx, tree, OID_AUTO, "ready-time",
+		SYSCTL_ADD_U32(ctx, tree, OID_AUTO, "ready-time",
 		    CTLFLAG_RD,
-		    &sc->ready_time, "measurement time, usec");
+		    &sc->ready_time, 0, "measurement time, usec");
 
 	}
 }
@@ -901,8 +902,7 @@ bh1750_fdt_get_params(struct bh1750_softc *sc)
 static void
 bh1750_start(void *arg)
 {
-	struct bh1750_softc *sc;
-	sc = arg;
+	struct bh1750_softc *sc = (struct bh1750_softc *)arg;
 
 	/* Check if device is connected */
 	if (bh1750_write(sc, BH1750_POWER_ON) != 0) {
