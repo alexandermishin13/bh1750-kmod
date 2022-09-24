@@ -30,7 +30,6 @@
 
 #include <sys/types.h>
 #include <sys/endian.h>
-#include <sys/module.h>
 #include <sys/systm.h>  /* uprintf */
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
@@ -39,6 +38,7 @@
 #include <sys/kernel.h> /* types used in module initialization */
 #include <sys/bus.h>
 #include <sys/uio.h>    /* uio struct */
+#include <sys/module.h>
 
 #include <sys/mutex.h>
 #include <sys/selinfo.h>
