@@ -333,6 +333,14 @@ static int
 bh1750_open(struct cdev *cdev, int oflags __unused, int devtype __unused,
     struct thread *td __unused)
 {
+	struct bh1750_softc *sc = cdev->si_drv1;
+
+	/* We can't be unloaded while open, so mark ourselves BUSY. */
+	mtx_lock(&sc->mtx);
+	if (device_get_state(sc->dev) < DS_BUSY) {
+		device_busy(sc->dev);
+	}
+	mtx_unlock(&sc->mtx);
 
 #ifdef DEBUG
 	uprintf("Device \"%s\" opened.\n", bh1750_cdevsw.d_name);
@@ -345,6 +353,15 @@ static int
 bh1750_close(struct cdev *cdev __unused, int fflag __unused, int devtype __unused,
     struct thread *td __unused)
 {
+	struct bh1750_softc *sc = cdev->si_drv1;
+
+	/*
+	 * Un-busy on last close. We rely on the vfs counting stuff to only call
+	 * this routine on last-close, so we don't need any open-count logic.
+	 */
+	mtx_lock(&sc->mtx);
+	device_unbusy(sc->dev);
+	mtx_unlock(&sc->mtx);
 
 #ifdef DEBUG
 	uprintf("Device \"%s\" closed.\n", bh1750_cdevsw.d_name);
@@ -676,7 +693,7 @@ bh1750_read_data(struct bh1750_softc *sc)
 static int
 bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 {
-	struct bh1750_softc *sc = arg1;
+	struct bh1750_softc *sc = (struct bh1750_softc *)arg1;
 	uint16_t _mtreg = sc->mtreg;
 	int error;
 
@@ -696,7 +713,7 @@ bh1750_mtreg_sysctl(SYSCTL_HANDLER_ARGS)
 static int
 bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS)
 {
-	struct bh1750_softc *sc = arg1;
+	struct bh1750_softc *sc = (struct bh1750_softc *)arg1;
 	uint8_t _lack = sc->quality_lack;
 	int error = 0;
 
@@ -718,7 +735,7 @@ bh1750_quality_sysctl(SYSCTL_HANDLER_ARGS)
 static int
 bh1750_hres_mode_sysctl(SYSCTL_HANDLER_ARGS)
 {
-	struct bh1750_softc *sc = arg1;
+	struct bh1750_softc *sc = (struct bh1750_softc *)arg1;
 	uint8_t _hres_mode = sc->hres_mode;
 	int error = 0;
 
