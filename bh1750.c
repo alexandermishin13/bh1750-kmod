@@ -61,6 +61,15 @@
 #define BH1750_MTREG_L_BYTE		0x60
 #define BH1750_DEV_NAME			"bh1750"
 
+#define BH1750_LOCK_INIT(sc)	\
+    mtx_init(&(sc)->mtx, "tm1637_mtx", NULL, MTX_DEF)
+#define BH1750_LOCK_DESTROY(sc)	\
+    mtx_destroy(&(sc)->mtx)
+#define BH1750_LOCK(sc)		\
+    mtx_lock(&(sc)->mtx)
+#define BH1750_UNLOCK(sc)	\
+    mtx_unlock(&(sc)->mtx)
+
 // Buffer size equals to maximum number of characters + 2 (for '\n' and '\0')
 #define U32_DECIMAL_LENGTH		((size_t) (sizeof(uint32_t) * CHAR_BIT * 302 / 1000 + 1) + 2)
 
@@ -258,11 +267,11 @@ bh1750_detach(device_t dev)
 
 	/* Destroy the rcrecv cdev. */
 	if (sc->cdev != NULL) {
-		mtx_lock(&sc->mtx);
+		BH1750_LOCK(sc);
 		sc->cdev->si_drv1 = NULL;
 		/* Wake everyone */
 		bh1750_notify(sc);
-		mtx_unlock(&sc->mtx);
+		BH1750_UNLOCK(sc);
 		destroy_dev(sc->cdev);
 	}
 
@@ -279,6 +288,8 @@ bh1750_detach(device_t dev)
 
 	free(sc->value_text, M_BH1750BUF);
 
+	BH1750_LOCK_DESTROY(sc);
+
 	return (0);
 }
 
@@ -290,7 +301,7 @@ bh1750_attach(device_t dev)
 	int unit = device_get_unit(dev);
 	int err;
 
-	mtx_init(&sc->mtx, "bh1750_mtx", NULL, MTX_DEF);
+	BH1750_LOCK_INIT(sc);
 	knlist_init_mtx(&sc->rsel.si_note, &sc->mtx);
 
 	sc->dev = dev;
@@ -336,11 +347,11 @@ bh1750_open(struct cdev *cdev, int oflags __unused, int devtype __unused,
 	struct bh1750_softc *sc = cdev->si_drv1;
 
 	/* We can't be unloaded while open, so mark ourselves BUSY. */
-	mtx_lock(&sc->mtx);
+	BH1750_LOCK(sc);
 	if (device_get_state(sc->dev) < DS_BUSY) {
 		device_busy(sc->dev);
 	}
-	mtx_unlock(&sc->mtx);
+	BH1750_UNLOCK(sc);
 
 #ifdef DEBUG
 	uprintf("Device \"%s\" opened.\n", bh1750_cdevsw.d_name);
@@ -359,9 +370,9 @@ bh1750_close(struct cdev *cdev __unused, int fflag __unused, int devtype __unuse
 	 * Un-busy on last close. We rely on the vfs counting stuff to only call
 	 * this routine on last-close, so we don't need any open-count logic.
 	 */
-	mtx_lock(&sc->mtx);
+	BH1750_LOCK(sc);
 	device_unbusy(sc->dev);
-	mtx_unlock(&sc->mtx);
+	BH1750_UNLOCK(sc);
 
 #ifdef DEBUG
 	uprintf("Device \"%s\" closed.\n", bh1750_cdevsw.d_name);
@@ -384,7 +395,7 @@ bh1750_read(struct cdev *cdev, struct uio *uio, int ioflag __unused)
 	if (!t->ready)
 		return (error);
 
-	mtx_lock(&sc->mtx);
+	BH1750_LOCK(sc);
 	uio_offset_saved = uio->uio_offset;
 
 	amnt = MIN(uio->uio_resid,
@@ -399,7 +410,7 @@ bh1750_read(struct cdev *cdev, struct uio *uio, int ioflag __unused)
 	else
 		t->ready = false;
 
-	mtx_unlock(&sc->mtx);
+	BH1750_UNLOCK(sc);
 
 	return (error);
 }
@@ -410,7 +421,7 @@ bh1750_poll(struct cdev *dev, int events, struct thread *td)
 	int revents = 0;
 	struct bh1750_softc *sc = dev->si_drv1;
 
-	mtx_lock(&sc->mtx);
+	BH1750_LOCK(sc);
 	if (events & (POLLIN | POLLRDNORM)) {
 		if (!sc->poll_sel) {
 			sc->poll_sel = true;
@@ -419,7 +430,7 @@ bh1750_poll(struct cdev *dev, int events, struct thread *td)
 		else
 		    selrecord(td, &sc->rsel);
 	}
-	mtx_unlock(&sc->mtx);
+	BH1750_UNLOCK(sc);
 
 	return (revents);
 }
@@ -446,9 +457,9 @@ bh1750_kqfilter(struct cdev *dev, struct knote *kn)
 	case EVFILT_READ:
 		kn->kn_fop = &bh1750_filterops;
 		kn->kn_hook = sc;
-		mtx_lock(&sc->mtx);
+		BH1750_LOCK(sc);
 		knlist_add(&sc->rsel.si_note, kn, 1);
-		mtx_unlock(&sc->mtx);
+		BH1750_UNLOCK(sc);
 		break;
 	default:
 		return (EINVAL);
