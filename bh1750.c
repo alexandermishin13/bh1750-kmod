@@ -88,8 +88,8 @@ static d_read_t		bh1750_read;
 //static d_write_t	bh1750_write;
 static d_poll_t		bh1750_poll;
 //static d_ioctl_t	bh1750_ioctl;
-
 static d_kqfilter_t	bh1750_kqfilter;
+
 static int		bh1750_kqevent(struct knote *, long);
 static void		bh1750_kqdetach(struct knote *);
 
@@ -265,7 +265,7 @@ bh1750_detach(device_t dev)
 {
 	struct bh1750_softc *sc = device_get_softc(dev);
 
-	/* Destroy the rcrecv cdev. */
+	/* Destroy the bh1750 cdev */
 	if (sc->cdev != NULL) {
 		BH1750_LOCK(sc);
 		sc->cdev->si_drv1 = NULL;
@@ -438,6 +438,8 @@ bh1750_poll(struct cdev *dev, int events, struct thread *td)
 static void
 bh1750_notify(struct bh1750_softc *sc)
 {
+	struct knlist *knlist;
+
 	mtx_assert(&sc->mtx, MA_OWNED);
 
 	if (sc->poll_sel) {
@@ -445,21 +447,22 @@ bh1750_notify(struct bh1750_softc *sc)
 		selwakeuppri(&sc->rsel, PZERO);
 	}
 
-	KNOTE_LOCKED(&sc->rsel.si_note, 0);
+	knlist = &sc->rsel.si_note;
+	KNOTE_UNLOCKED(knlist, 0);
 }
 
 static int
 bh1750_kqfilter(struct cdev *dev, struct knote *kn)
 {
 	struct bh1750_softc *sc = dev->si_drv1;
+	struct knlist *knlist;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
 		kn->kn_fop = &bh1750_filterops;
 		kn->kn_hook = sc;
-		BH1750_LOCK(sc);
-		knlist_add(&sc->rsel.si_note, kn, 1);
-		BH1750_UNLOCK(sc);
+		knlist = &sc->rsel.si_note;
+		knlist_add(knlist, kn, 0);
 		break;
 	default:
 		return (EINVAL);
@@ -489,8 +492,9 @@ static void
 bh1750_kqdetach(struct knote *kn)
 {
 	struct bh1750_softc *sc = kn->kn_hook;
+	struct knlist *knlist = &sc->rsel.si_note;
 
-	knlist_remove(&sc->rsel.si_note, kn, 0);
+	knlist_remove(knlist, kn, 0);
 }
 
 static void
